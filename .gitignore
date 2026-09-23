@@ -1,0 +1,73 @@
+# Unity/Tuanjie 工程 .gitignore
+# 参考 https://github.com/github/gitignore/blob/main/Unity.gitignore
+#
+# 放在工程根目录。Library/Temp 等目录由编辑器自动生成，不入库。
+
+# 编辑器自动生成的缓存目录
+/.utmp/
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+
+# 内存快照可能非常大，且包含敏感数据
+/[Mm]emoryCaptures/
+# 录屏文件可能非常大
+/[Rr]ecordings/
+
+# 如使用 Asset Store 工具插件可取消注释
+# /[Aa]ssets/AssetStoreTools*
+
+# JetBrains Rider 自动生成的插件
+/[Aa]ssets/Plugins/Editor/JetBrains*
+
+# Visual Studio 缓存目录
+.vs/
+
+# Gradle 缓存目录
+.gradle/
+
+# 自动生成的 VS/MonoDevelop 解决方案与工程文件
+ExportedObj/
+.consulo/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# 编辑器生成的 meta 附带文件
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# 崩溃报告生成的系统信息
+sysinfo.txt
+
+# 构建产物
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# Crashlytics 生成文件
+crashlytics-build.properties
+
+# Addressables 打包产物
+/[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
+
+# 自动生成的临时 Android 资源
+/[Aa]ssets/[Ss]treamingAssets/aa.meta
+/[Aa]ssets/[Ss]treamingAssets/aa/*
