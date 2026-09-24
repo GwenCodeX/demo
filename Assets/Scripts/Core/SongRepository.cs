@@ -1,9 +1,11 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace RhythmPlayer.Core
 {
@@ -61,19 +63,77 @@ namespace RhythmPlayer.Core
             public float firstTime;
         }
 
-        /// <summary>歌曲根目录（编辑器与打包后自动区分）</summary>
+        /// <summary>内置歌包清单文件名（打包时生成在 StreamingAssets，安卓首次运行用它释放歌包）</summary>
+        public const string ManifestName = "songs_manifest.txt";
+
+        /// <summary>歌曲根目录（编辑器 / 桌面打包 / 安卓 自动区分）</summary>
         public static string Root
         {
             get
             {
+#if UNITY_EDITOR
                 // 编辑器：Application.dataPath 就是工程里的 Assets 目录
                 var inAssets = Path.Combine(Application.dataPath, "Songs");
                 if (Directory.Exists(inAssets)) return inAssets;
+#endif
+                // 安卓：可写目录（首次运行由 PrepareRoutine 把内置歌包释放到这里）
+                if (Application.platform == RuntimePlatform.Android)
+                {
+                    return Path.Combine(Application.persistentDataPath, "Songs");
+                }
 
-                // 打包后：Application.dataPath 是 xxx_Data，取它的上级（即 exe 所在目录）再拼 Songs
+                // 桌面打包后：Application.dataPath 是 xxx_Data，取它的上级（即 exe 所在目录）再拼 Songs
                 var parent = Directory.GetParent(Application.dataPath);
                 return Path.Combine(parent != null ? parent.FullName : Application.dataPath, "Songs");
             }
+        }
+
+        /// <summary>
+        /// 准备歌曲资源（启动时用协程调用）：
+        /// 安卓首次运行时把打包进 StreamingAssets 的歌包释放到可写目录；其他平台直接返回。
+        /// </summary>
+        public static IEnumerator PrepareRoutine()
+        {
+            if (Application.platform != RuntimePlatform.Android) yield break;
+
+            var targetRoot = Path.Combine(Application.persistentDataPath, "Songs");
+            var doneFlag = Path.Combine(targetRoot, ".ready");
+            if (File.Exists(doneFlag)) yield break; // 已经释放过（想重新释放就删掉这个文件）
+
+            // 清单里的文件在 APK 内部（StreamingAssets），必须用 UnityWebRequest 读取
+            using (var manifestRequest = UnityWebRequest.Get(Application.streamingAssetsPath + "/" + ManifestName))
+            {
+                yield return manifestRequest.SendWebRequest();
+                if (manifestRequest.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogWarning($"[导入] 读取内置歌包清单失败：{manifestRequest.error}");
+                    yield break;
+                }
+
+                var entries = manifestRequest.downloadHandler.text.Split('\n');
+                foreach (var raw in entries)
+                {
+                    var relative = raw.Trim();
+                    if (relative.Length == 0) continue;
+
+                    using (var fileRequest = UnityWebRequest.Get(Application.streamingAssetsPath + "/Songs/" + relative))
+                    {
+                        yield return fileRequest.SendWebRequest();
+                        if (fileRequest.result != UnityWebRequest.Result.Success)
+                        {
+                            Debug.LogWarning($"[导入] 释放 {relative} 失败：{fileRequest.error}");
+                            continue;
+                        }
+
+                        var destination = Path.Combine(targetRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+                        Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? targetRoot);
+                        File.WriteAllBytes(destination, fileRequest.downloadHandler.data);
+                    }
+                }
+            }
+
+            File.WriteAllText(doneFlag, "ok");
+            Debug.Log($"[导入] 内置歌包已释放到 {targetRoot}");
         }
 
         /// <summary>

@@ -6,178 +6,155 @@ using RhythmPlayer.UI;
 
 namespace RhythmPlayer.Play
 {
-    /// <summary>
-    /// 六边形演奏面板。
-    /// 布局：左列上中下 = 键 1/2/3，右列上中下 = 键 4/5/6（对应六边形六个边的中点）。
-    /// 动画：音符在中心小六边形边界"长出来"（由小变大），随后向外飞向判定点；
-    ///       到达判定点的瞬间即拍点，打中即消失并播放打击特效。
-    /// 判定：±80ms = Best，±120ms = Cool，±160ms = Good，超过或没打 = Miss。
-    /// 输入：键盘（默认 E/D/C/I/K/,）、触摸（点判定点附近 = 按对应键）、自动演示（Tab 切换）。
-    /// </summary>
     public sealed class Playfield : MonoBehaviour
     {
-        // ===== 常量 =====
-
-        /// <summary>键位 1-6 对应的六边形方向角（度）：120°=左上, 180°=左中, 240°=左下, 60°=右上, 0°=右中, 300°=右下</summary>
         static readonly float[] PadAngleDeg = { 120f, 180f, 240f, 60f, 0f, 300f };
 
-        const float Overshoot = 0.4f;           // 音符越过判定点后多远消失（世界单位）
-        const float BothLineWindow = 0.9f;      // 双押连线在到达判定点前多远开始显示
-        const float BirthScaleFrom = 0.2f;      // 浮现动画的起始缩放（由小变大）
-        const float MissWindowSeconds = 0.16f;  // 超过拍点该时长仍未打中 → Miss
-        const float BestWindowMs = 80f;         // Best 判定窗（毫秒）
-        const float CoolWindowMs = 120f;        // Cool 判定窗（毫秒）
-        const float GoodWindowMs = 160f;        // Good 判定窗（毫秒）
-        const float FrameDuration = 0.045f;     // 打击特效每帧时长（秒）
-        const float PopupLife = 0.45f;          // 判定字存活时长（秒）
-        const float EffectWidth = 1.7f;         // 特效/判定字的基准宽度（世界单位）
-        const int ComboShowFrom = 4;            // 连击 ≥ 该值才显示数字
-        const float ComboDigitHeight = 0.6f;    // 连击数字高度（世界单位，比之前的大字小很多）
-        const float ComboDigitGap = 0.05f;      // 连击数字间距
-        const float ComboDigitAlpha = 0.7f;     // 连击数字透明度（半透明但看得清）
-        const float ComboTagAlpha = 0.85f;      // 连击标记透明度
-        const float ComboTagWidth = 0.85f;      // 连击标记宽度
-        const float ComboCenterY = -0.12f;      // 数字组的纵向位置（六边形中心略偏下）
-        const float ComboTagY = 0.55f;          // 连击标记的纵向位置（数字上方）
-        const int ComboMaxDigits = 5;           // 连击数字最多显示位数
+        const float Overshoot = 0.4f;
+        const float BothLineWindow = 0.9f;
+        const float BirthScaleFrom = 0.2f;
+        const float MissWindowSeconds = 0.16f;
+        const float BestWindowMs = 80f;
+        const float CoolWindowMs = 120f;
+        const float GoodWindowMs = 160f;
+        const float FrameDuration = 0.045f;
+        const float PopupLife = 0.45f;
+        const float EffectWidth = 1.7f;
+        const int ComboShowFrom = 4;
+        const float ComboDigitHeight = 0.6f;
+        const float ComboDigitGap = 0.05f;
+        const float ComboDigitAlpha = 0.7f;
+        const float ComboTagAlpha = 0.85f;
+        const float ComboTagWidth = 0.85f;
+        const float ComboCenterY = -0.12f;
+        const float ComboTagY = 0.55f;
+        const int ComboMaxDigits = 5;
 
-        // 判定等级
         const int GradeBest = 0;
         const int GradeCool = 1;
         const int GradeGood = 2;
         const int GradeMiss = 3;
 
-        // ===== 序列化字段 =====
-
         [Header("引用")]
         [SerializeField] SongClock clock;
 
         [Header("皮肤（留空则用纯色矩形）")]
-        [SerializeField] Sprite tapSprite;           // 单点音符
-        [SerializeField] Sprite tapBothSprite;       // 双押音符
-        [SerializeField] Sprite holdHeadSprite;      // 长条头部
-        [SerializeField] Sprite holdBothSprite;      // 双押长条头部
-        [SerializeField] Sprite holdBodySprite;      // 长条身体
-        [SerializeField] Sprite holdTailSprite;      // 长条尾部
-        [SerializeField] Sprite backgroundSprite;    // 默认背景（歌曲包没带背景时使用）
-        [SerializeField] Sprite hexFrameSprite;      // 六边形外框
-        [SerializeField] Sprite bothLineSprite;      // 双押连线
+        [SerializeField] Sprite tapSprite;
+        [SerializeField] Sprite tapBothSprite;
+        [SerializeField] Sprite holdHeadSprite;
+        [SerializeField] Sprite holdBothSprite;
+        [SerializeField] Sprite holdBodySprite;
+        [SerializeField] Sprite holdTailSprite;
+        [SerializeField] Sprite backgroundSprite;
+        [SerializeField] Sprite hexFrameSprite;
+        [SerializeField] Sprite bothLineSprite;
 
         [Header("打击特效与判定字")]
-        [SerializeField] Sprite[] hitFxFrames;       // 打击特效序列帧（hit-0 ~ hit-7）
-        [SerializeField] Sprite bestSprite;          // Best 判定字
-        [SerializeField] Sprite coolSprite;          // Cool 判定字
-        [SerializeField] Sprite goodSprite;          // Good 判定字
-        [SerializeField] Sprite missSprite;          // Miss 判定字
-        [SerializeField] Sprite[] comboDigitSprites; // 连击数字 0-9（num-0 ~ num-9）
-        [SerializeField] Sprite comboTagSprite;      // 连击标记（ComboTAG，显示在数字上方）
+        [SerializeField] Sprite[] hitFxFrames;
+        [SerializeField] Sprite bestSprite;
+        [SerializeField] Sprite coolSprite;
+        [SerializeField] Sprite goodSprite;
+        [SerializeField] Sprite missSprite;
+        [SerializeField] Sprite[] comboDigitSprites;
+        [SerializeField] Sprite comboTagSprite;
+
+        [Header("音效")]
+        [SerializeField] AudioClip hitSound;
+        [Range(0f, 1f)]
+        [SerializeField] float hitSoundVolume = 0.7f;
 
         [Header("六边形布局（世界单位）")]
         [Tooltip("外六边形中心到顶点的距离")]
         [SerializeField] float hexRadius = 4.3f;
-        [Tooltip("中心出生区（小六边形）的判定点距离，音符从这里长出来")]
+        [Tooltip("中心出生区的判定点距离，音符从这里长出来")]
         [SerializeField] float spawnRadius = 0.9f;
-        [Tooltip("显示中心出生区轮廓")]
         [SerializeField] bool showSpawnZone = true;
 
         [Header("手感")]
         [Tooltip("每拍飞行距离，越大越快")]
         [SerializeField] float unitsPerBeat = 2.4f;
-        [Tooltip("出生动画时长（拍）")]
         [SerializeField] float birthBeats = 0.8f;
 
         [Header("按键映射（左列上中下 1/2/3，右列上中下 4/5/6）")]
         [SerializeField] KeyCode[] judgeKeys = { KeyCode.E, KeyCode.D, KeyCode.C, KeyCode.I, KeyCode.K, KeyCode.Comma };
         [SerializeField] bool showPadLabels = true;
 
-        [Header("触摸输入（手机 / 触屏电脑）")]
-        [Tooltip("开启后，点判定点附近 = 按对应键")]
+        [Header("触摸输入")]
         [SerializeField] bool touchEnabled = true;
-        [Tooltip("触摸判定半径（世界单位）")]
         [SerializeField] float touchRadius = 1.1f;
 
-        [Header("音效")]
-        [SerializeField] AudioClip hitSound;          // 打击音效（命中/空按；建议用皮肤里的 cube-arcade.wav）
-        [Range(0f, 1f)]
-        [SerializeField] float hitSoundVolume = 0.7f; // 命中音量
-
         [Header("启动")]
-        [Tooltip("自动演示：自动在拍点打出 Best；Tab 切换手动")]
         [SerializeField] bool autoPlay = true;
 
-        // ===== 运行时数据 =====
-
-        /// <summary>一条正在显示的音符（对象池复用）</summary>
         sealed class NoteView
         {
-            public GameObject Root;             // 根对象（挂在面板下）
-            public SpriteRenderer Head;         // 头（单点就是它本体）
-            public SpriteRenderer Body;         // 长条身体
-            public SpriteRenderer Tail;         // 长条尾巴
-            public SpriteRenderer BothLine;     // 双押连线
-            public ChartNote Note;              // 对应的谱面数据
-            public bool Judged;                 // 是否已判定（防止重复判定/Miss）
-            public bool Vanish;                 // 打中后立即消失标记
+            public GameObject Root;
+            public SpriteRenderer Head;
+            public SpriteRenderer Body;
+            public SpriteRenderer Tail;
+            public SpriteRenderer BothLine;
+            public ChartNote Note;
+            public bool Judged;
+            public bool Vanish;
         }
 
-        /// <summary>一个特效（打击动画或判定字）</summary>
         sealed class Effect
         {
-            public SpriteRenderer Renderer;     // 渲染器
-            public Sprite[] Frames;             // 序列帧（判定字为 null）
-            public float Age;                   // 已存活时间
-            public float Life;                  // 总时长
-            public float BaseScale;             // 基准缩放（按目标宽度算好）
-            public bool IsPopup;                // 是否是判定字（弹出动画不同）
+            public SpriteRenderer Renderer;
+            public Sprite[] Frames;
+            public float Age;
+            public float Life;
+            public float BaseScale;
+            public bool IsPopup;
         }
 
-        readonly List<NoteView> active = new List<NoteView>();          // 场上音符
-        readonly Stack<NoteView> pool = new Stack<NoteView>();          // 音符对象池
-        readonly List<Effect> effects = new List<Effect>();             // 场上特效
-        readonly Stack<SpriteRenderer> effectPool = new Stack<SpriteRenderer>(); // 特效渲染器池
-        readonly SpriteRenderer[] padFlashes = new SpriteRenderer[6];   // 六个判定点的高亮
-        readonly float[] padFlashTimer = new float[6];                  // 高亮剩余时间
+        readonly List<NoteView> active = new List<NoteView>();
+        readonly Stack<NoteView> pool = new Stack<NoteView>();
+        readonly List<Effect> effects = new List<Effect>();
+        readonly Stack<SpriteRenderer> effectPool = new Stack<SpriteRenderer>();
+        readonly List<SpriteRenderer> comboDigits = new List<SpriteRenderer>();
+        readonly SpriteRenderer[] padFlashes = new SpriteRenderer[6];
+        readonly float[] padFlashTimer = new float[6];
 
-        ChartData chart;            // 当前谱面
-        int nextIndex;              // 下一个待激活的音符下标（谱面按拍点排序）
-        double lastBeat;            // 上一帧的拍数（检测跳转用）
-        bool ready;                 // 是否已有可玩的谱面
-        SpriteRenderer backgroundRenderer; // 当前背景（换曲时替换精灵）
-        string[] padLabelTexts;     // 判定点标签文字（预生成，避免每帧分配）
+        ChartData chart;
+        int nextIndex;
+        double lastBeat;
+        bool ready;
+        SpriteRenderer backgroundRenderer;
+        GameObject comboRoot;
+        SpriteRenderer comboTag;
+        AudioSource sfxSource;
+        Camera mainCamera;
+
+        string[] padLabelTexts;
+        string percentText = "0.00%";
+        string comboTextCache = "0";
+        int lastComboShown = -1;
+        float lastAccuracy = -1f;
+
         GUIStyle labelStyle;
-        GUIStyle percentStyle;      // 右上角：准确率百分比
-        AudioSource sfxSource;      // 打击音效音源（2D）
-        GameObject comboRoot;       // 正中心连击显示（世界精灵，渲染在音符之下）
-        readonly List<SpriteRenderer> comboDigits = new List<SpriteRenderer>(); // 连击数字位（对象池）
-        SpriteRenderer comboTag;    // 连击标记（COMBO 小字）
+        GUIStyle percentStyle;
 
-        // 判定统计
         int bestCount;
         int coolCount;
         int goodCount;
         int missCount;
         int combo;
-        int maxCombo;               // 最大连击
-        float comboPulse;           // 连击数字弹跳动画计时（1 → 0 衰减）
+        int maxCombo;
+        float comboPulse;
 
         void Start()
         {
             if (clock == null) clock = FindObjectOfType<SongClock>();
-            QualitySettings.vSyncCount = 1; // 垂直同步，画面更顺滑
+            mainCamera = Camera.main;
             BuildVisuals();
             BuildPadLabels();
 
-            // 打击音效音源（2D 播放，多个音效可叠加）
             sfxSource = gameObject.AddComponent<AudioSource>();
             sfxSource.playOnAwake = false;
             sfxSource.spatialBlend = 0f;
-
-            // 谱面由 GameRoot 通过 LoadSong 装载
         }
 
-        // ===== 歌曲装载 / 清场 =====
-
-        /// <summary>装载一首歌：清场 → 读取并解析谱面 → 换背景。时钟的启动由 GameRoot 负责。</summary>
         public void LoadSong(SongInfo song)
         {
             ClearForSelect();
@@ -188,18 +165,19 @@ namespace RhythmPlayer.Play
                 return;
             }
 
-            chart = ChartParser.LoadFile(song.ChartPath); // 文本谱面与 Malody（.mc）谱面都能装载
+            chart = ChartParser.LoadFile(song.ChartPath);
             foreach (var error in chart.Errors) Debug.LogWarning("[谱面] " + error);
             Debug.Log($"[谱面] {song.Name}：{chart.Notes.Count} 个音符，其中长条 {chart.HoldCount} 个");
 
             nextIndex = 0;
             lastBeat = 0.0;
             ready = chart.Notes.Count > 0;
+            lastAccuracy = -1f;
+            lastComboShown = -1;
 
             RefreshBackground(song.BackgroundPath);
         }
 
-        /// <summary>回到选曲界面：清空音符、特效与统计（场景与皮肤保留）</summary>
         public void ClearForSelect()
         {
             for (var i = active.Count - 1; i >= 0; i--) Release(i);
@@ -215,9 +193,9 @@ namespace RhythmPlayer.Play
             ready = false;
             ResetCounters();
             if (backgroundRenderer != null) backgroundRenderer.gameObject.SetActive(false);
+            if (comboRoot != null) comboRoot.SetActive(false);
         }
 
-        /// <summary>清空判定统计</summary>
         void ResetCounters()
         {
             bestCount = 0;
@@ -229,23 +207,13 @@ namespace RhythmPlayer.Play
             comboPulse = 0f;
         }
 
-        // ===== 结算数据（GameRoot 读取） =====
-
-        /// <summary>Best 数量</summary>
         public int BestCount => bestCount;
-        /// <summary>Cool 数量</summary>
         public int CoolCount => coolCount;
-        /// <summary>Good 数量</summary>
         public int GoodCount => goodCount;
-        /// <summary>Miss 数量</summary>
         public int MissCount => missCount;
-        /// <summary>最大连击</summary>
         public int MaxCombo => maxCombo;
-        /// <summary>谱面音符总数</summary>
         public int TotalNotes => chart != null ? chart.Notes.Count : 0;
 
-        /// <summary>完成度百分比（0-1）：Best=100%、Cool=80%、Good=60%、Miss=0%，按整谱音符数计算。
-        /// 开局 0%，随打随涨，全 Best 到 100%（结算时与"准确率"一致）。</summary>
         public float Accuracy
         {
             get
@@ -256,16 +224,25 @@ namespace RhythmPlayer.Play
             }
         }
 
-        /// <summary>分数（0-1000000）：等于完成度 × 1,000,000（全 Best 满分）</summary>
         public int Score => Mathf.RoundToInt(Accuracy * 1000000f);
 
-        /// <summary>当前下落速度（每拍距离）</summary>
         public float NoteSpeed => unitsPerBeat;
 
-        /// <summary>设置下落速度（设置项，范围 0.6 ~ 6）</summary>
         public void SetNoteSpeed(float value) => unitsPerBeat = Mathf.Clamp(value, 0.6f, 6f);
 
-        /// <summary>换背景图（歌曲包没带背景时隐藏背景）</summary>
+        public KeyCode GetJudgeKey(int lane)
+        {
+            if (judgeKeys == null || lane < 0 || lane >= judgeKeys.Length) return KeyCode.None;
+            return judgeKeys[lane];
+        }
+
+        public void SetJudgeKey(int lane, KeyCode key)
+        {
+            if (judgeKeys == null || lane < 0 || lane >= judgeKeys.Length) return;
+            judgeKeys[lane] = key;
+            BuildPadLabels();
+        }
+
         void RefreshBackground(string path)
         {
             var sprite = LoadSpriteFromFile(path) ?? backgroundSprite;
@@ -277,7 +254,6 @@ namespace RhythmPlayer.Play
 
             if (backgroundRenderer == null)
             {
-                // 背景放最远处（z 越大越远），渲染顺序最低
                 backgroundRenderer = CreateQuad(transform, "Background", -10, new Color(0.65f, 0.65f, 0.75f));
                 backgroundRenderer.transform.localPosition = new Vector3(0f, 0f, 2f);
             }
@@ -285,8 +261,7 @@ namespace RhythmPlayer.Play
             backgroundRenderer.gameObject.SetActive(true);
             backgroundRenderer.sprite = sprite;
 
-            // 等比放大到铺满屏幕（取横竖两个方向所需缩放的较大者）
-            var cam = Camera.main;
+            var cam = MainCamera;
             var viewHeight = cam != null && cam.orthographic ? cam.orthographicSize * 2f : 11.6f;
             var viewWidth = viewHeight * Screen.width / Mathf.Max(1, Screen.height);
             var size = sprite.bounds.size;
@@ -294,7 +269,6 @@ namespace RhythmPlayer.Play
             backgroundRenderer.transform.localScale = new Vector3(scale, scale, 1f);
         }
 
-        /// <summary>从磁盘读取图片（jpg/png）生成 Sprite；失败返回 null</summary>
         static Sprite LoadSpriteFromFile(string path)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
@@ -313,27 +287,24 @@ namespace RhythmPlayer.Play
             }
         }
 
-        // ===== 每帧主循环 =====
+        Camera MainCamera => mainCamera != null ? mainCamera : (mainCamera = Camera.main);
 
         void Update()
         {
-            if (comboPulse > 0f) comboPulse = Mathf.Max(0f, comboPulse - Time.deltaTime * 2.5f); // 连击弹跳衰减
+            if (comboPulse > 0f) comboPulse = Mathf.Max(0f, comboPulse - Time.deltaTime * 2.5f);
             UpdateComboDisplay();
             HandleInput();
             UpdateEffects();
             if (!ready || clock == null) return;
 
             var beat = clock.Beat;
-
-            // 拍数大跳（跳转/重开）时重建场上音符
             if (System.Math.Abs(beat - lastBeat) > 1.0) ResetTo(beat);
             lastBeat = beat;
 
-            var apothem = hexRadius * 0.866f;             // 中心到判定点的距离
-            var flightStart = apothem - spawnRadius;      // 出生区边界 → 判定点的飞行距离
-            var birthLength = birthBeats * unitsPerBeat;  // 出生动画对应的距离
+            var apothem = hexRadius * 0.866f;
+            var flightStart = apothem - spawnRadius;
+            var birthLength = birthBeats * unitsPerBeat;
 
-            // 音符进入出生动画范围时激活
             while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= flightStart + birthLength)
             {
                 Activate(nextIndex);
@@ -345,8 +316,6 @@ namespace RhythmPlayer.Play
             for (var i = active.Count - 1; i >= 0; i--)
             {
                 var view = active[i];
-
-                // 打中后标记消失：立即回收
                 if (view.Vanish)
                 {
                     Release(i);
@@ -355,7 +324,6 @@ namespace RhythmPlayer.Play
 
                 var note = view.Note;
 
-                // ---- 判定：到期未打 → Miss；自动演示则在拍点直接判 Best ----
                 if (!view.Judged)
                 {
                     var noteSeconds = clock.BeatToSeconds(note.StartBeat);
@@ -368,28 +336,25 @@ namespace RhythmPlayer.Play
                     continue;
                 }
 
-                // ---- 位置：全部由拍数推算 ----
                 var lane = Mathf.Clamp(note.Lane, 0, 5);
-                var radial = PadDirection(lane);                                 // 该键位的向外方向
-                var rotation = Quaternion.Euler(0f, 0f, PadAngleDeg[lane]);      // 轨道朝向
-                var noteWidth = 0.9f;                                            // 音符宽度
-                var ageHead = (float)(note.StartBeat - beat) * unitsPerBeat;     // 头距判定点还有多远
-                var ageTail = (float)(note.EndBeat - beat) * unitsPerBeat;       // 尾距判定点还有多远
+                var radial = PadDirection(lane);
+                var rotation = Quaternion.Euler(0f, 0f, PadAngleDeg[lane]);
+                var noteWidth = 0.9f;
+                var ageHead = (float)(note.StartBeat - beat) * unitsPerBeat;
+                var ageTail = (float)(note.EndBeat - beat) * unitsPerBeat;
 
                 float headDist;
                 float headScale;
                 float headAlpha;
                 if (ageHead > flightStart)
                 {
-                    // 出生期：停在出生区边界上，由小变大
                     headDist = spawnRadius;
                     var t = Mathf.Clamp01((flightStart + birthLength - ageHead) / birthLength);
-                    headScale = Mathf.Lerp(BirthScaleFrom, 1f, t * t * (3f - 2f * t)); // smoothstep，起步缓
+                    headScale = Mathf.Lerp(BirthScaleFrom, 1f, t * t * (3f - 2f * t));
                     headAlpha = t;
                 }
                 else
                 {
-                    // 飞行期：从出生区边界飞向判定点，越过判定点后继续外飞一小段
                     headDist = apothem - ageHead;
                     headScale = 1f;
                     headAlpha = 1f;
@@ -397,16 +362,14 @@ namespace RhythmPlayer.Play
 
                 if (note.IsHold)
                 {
-                    // ---- 长条 ----
-                    headDist = Mathf.Min(headDist, apothem); // 头到达判定点后钉住，等待被"消耗"
+                    headDist = Mathf.Min(headDist, apothem);
 
                     var tailRaw = apothem - ageTail;
-                    var tailEmerged = tailRaw > spawnRadius;                                          // 尾巴是否已从出生区长出
-                    var tailDist = Mathf.Min(headDist, Mathf.Max(tailRaw, spawnRadius));              // 没长出来前贴在出生区边界
+                    var tailEmerged = tailRaw > spawnRadius;
+                    var tailDist = Mathf.Min(headDist, Mathf.Max(tailRaw, spawnRadius));
 
                     PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
 
-                    // 身体 = 头到尾之间的段；头还在出生区时长度为 0（隐藏）
                     var bodyLength = headDist - tailDist;
                     if (bodyLength > 0.02f)
                     {
@@ -418,7 +381,6 @@ namespace RhythmPlayer.Play
                         view.Body.gameObject.SetActive(false);
                     }
 
-                    // 尾巴：长出后才显示
                     if (tailEmerged)
                     {
                         view.Tail.gameObject.SetActive(true);
@@ -430,11 +392,10 @@ namespace RhythmPlayer.Play
                     }
 
                     UpdateBothLine(view, apothem, headDist);
-                    if (tailRaw > apothem + Overshoot) Release(i); // 整条越过判定点，回收
+                    if (tailRaw > apothem + Overshoot) Release(i);
                 }
                 else
                 {
-                    // ---- 单点 ----
                     PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
                     UpdateBothLine(view, apothem, headDist);
                     if (headDist > apothem + Overshoot) Release(i);
@@ -442,15 +403,12 @@ namespace RhythmPlayer.Play
             }
         }
 
-        /// <summary>跳转/重开：按当前拍数重建场上音符</summary>
         void ResetTo(double beat)
         {
             for (var i = active.Count - 1; i >= 0; i--) Release(i);
 
             nextIndex = 0;
             while (nextIndex < chart.Notes.Count && chart.Notes[nextIndex].StartBeat <= beat) nextIndex++;
-
-            // 正在持续中的长条重新激活
             for (var i = 0; i < nextIndex; i++)
             {
                 if (chart.Notes[i].EndBeat > beat) Activate(i);
@@ -459,7 +417,6 @@ namespace RhythmPlayer.Play
             ResetCounters();
         }
 
-        /// <summary>从对象池取一个音符视图并激活</summary>
         void Activate(int index)
         {
             var note = chart.Notes[index];
@@ -471,7 +428,6 @@ namespace RhythmPlayer.Play
 
             if (note.IsHold)
             {
-                // 长条：头部与尾部同色同形——单押蓝色（SIMPLEHold），双押橙色（SIMPLEholdboth）
                 var holdSprite = note.IsDouble
                     ? (holdBothSprite != null ? holdBothSprite : holdHeadSprite)
                     : (holdHeadSprite != null ? holdHeadSprite : holdTailSprite);
@@ -487,11 +443,9 @@ namespace RhythmPlayer.Play
             view.Body.gameObject.SetActive(false);
             view.Tail.gameObject.SetActive(false);
             view.BothLine.gameObject.SetActive(false);
-
             active.Add(view);
         }
 
-        /// <summary>回收一个音符视图到对象池</summary>
         void Release(int index)
         {
             var view = active[index];
@@ -500,9 +454,6 @@ namespace RhythmPlayer.Play
             active.RemoveAt(index);
         }
 
-        // ===== 判定 =====
-
-        /// <summary>执行判定：打中 → 特效 + 判定字 + 消失；Miss → 判定字 + 清零 combo</summary>
         void ApplyJudgment(NoteView view, int grade)
         {
             view.Judged = true;
@@ -514,7 +465,7 @@ namespace RhythmPlayer.Play
             {
                 missCount++;
                 combo = 0;
-                SpawnPopup(radial * (apothem - 0.75f), missSprite); // 判定字画在判定点稍内侧
+                SpawnPopup(radial * (apothem - 0.75f), missSprite);
                 return;
             }
 
@@ -523,15 +474,14 @@ namespace RhythmPlayer.Play
             else goodCount++;
             combo++;
             if (combo > maxCombo) maxCombo = combo;
-            comboPulse = 1f;                                    // 触发连击数字弹跳
+            comboPulse = 1f;
 
-            PlayHitSound(hitSoundVolume);                       // 命中音效
-            SpawnFx(radial * apothem);                          // 打击特效在判定点上
+            PlayHitSound(hitSoundVolume);
+            SpawnFx(radial * apothem);
             SpawnPopup(radial * (apothem - 0.75f), grade == GradeBest ? bestSprite : grade == GradeCool ? coolSprite : goodSprite);
-            if (!view.Note.IsHold) view.Vanish = true;          // 单点打中即消失；长条继续被"消耗"
+            if (!view.Note.IsHold) view.Vanish = true;
         }
 
-        /// <summary>按键/触摸触发判定：在该轨道里找判定窗内最近的音符，按偏差给等级</summary>
         void TryJudgeByInput(int lane)
         {
             var now = clock.SongTime;
@@ -544,7 +494,7 @@ namespace RhythmPlayer.Play
                 if (view.Judged || view.Note.Lane != lane) continue;
 
                 var delta = Mathf.Abs((float)(clock.BeatToSeconds(view.Note.StartBeat) - now));
-                if (delta > GoodWindowMs / 1000f) continue; // 超出 Good 窗，不参与
+                if (delta > GoodWindowMs / 1000f) continue;
                 if (delta < bestDelta)
                 {
                     bestDelta = delta;
@@ -553,7 +503,7 @@ namespace RhythmPlayer.Play
             }
             if (bestIndex < 0)
             {
-                PlayHitSound(hitSoundVolume * 0.3f); // 附近没有音符：给一个轻微的空按反馈
+                PlayHitSound(hitSoundVolume * 0.3f);
                 return;
             }
 
@@ -562,16 +512,12 @@ namespace RhythmPlayer.Play
             ApplyJudgment(active[bestIndex], grade);
         }
 
-        /// <summary>播放打击音效（多个音叠加时 PlayOneShot 会自动混音）</summary>
         void PlayHitSound(float volume)
         {
             if (sfxSource == null || hitSound == null || volume <= 0.001f) return;
             sfxSource.PlayOneShot(hitSound, volume);
         }
 
-        // ===== 特效（打击动画 / 判定字） =====
-
-        /// <summary>在指定位置播放打击特效（hit-0~7 序列帧）</summary>
         void SpawnFx(Vector3 position)
         {
             if (hitFxFrames == null || hitFxFrames.Length == 0 || hitFxFrames[0] == null) return;
@@ -584,7 +530,6 @@ namespace RhythmPlayer.Play
             InitEffect(effect, position, 13);
         }
 
-        /// <summary>在指定位置弹出判定字（best/cool/good/miss）</summary>
         void SpawnPopup(Vector3 position, Sprite sprite)
         {
             if (sprite == null) return;
@@ -625,7 +570,6 @@ namespace RhythmPlayer.Play
             return renderer;
         }
 
-        /// <summary>推进所有特效：序列帧播放、弹出动画、淡出、回收</summary>
         void UpdateEffects()
         {
             var delta = Time.deltaTime;
@@ -637,7 +581,6 @@ namespace RhythmPlayer.Play
 
                 if (effect.Frames != null)
                 {
-                    // 序列帧动画：按进度切帧，最后 25% 淡出
                     var index = Mathf.Min(effect.Frames.Length - 1, (int)(t * effect.Frames.Length));
                     effect.Renderer.sprite = effect.Frames[index];
                     var alpha = t < 0.75f ? 1f : Mathf.InverseLerp(1f, 0.75f, t);
@@ -645,7 +588,6 @@ namespace RhythmPlayer.Play
                 }
                 else
                 {
-                    // 判定字：先快速弹出（略过冲），再回到基准大小；后半段淡出
                     var pop = t < 0.3f ? Mathf.Lerp(0.6f, 1.12f, t / 0.3f) : Mathf.Lerp(1.12f, 1f, (t - 0.3f) / 0.7f);
                     effect.Renderer.transform.localScale = Vector3.one * (effect.BaseScale * pop);
                     var alpha = t < 0.6f ? 1f : Mathf.InverseLerp(1f, 0.6f, t);
@@ -661,25 +603,29 @@ namespace RhythmPlayer.Play
             }
         }
 
-        /// <summary>
-        /// 正中心连击显示：用 num-* 数字图排成一行（世界精灵，渲染在音符下方），
-        /// 数字半透明、连击达到阈值才显示，增长时轻微弹跳。
-        /// </summary>
         void UpdateComboDisplay()
         {
             if (comboRoot == null) return;
 
             var visible = ready && combo >= ComboShowFrom && comboDigitSprites != null && comboDigitSprites.Length >= 10;
             if (comboRoot.activeSelf != visible) comboRoot.SetActive(visible);
-            if (!visible) return;
+            if (!visible)
+            {
+                lastComboShown = -1;
+                return;
+            }
 
-            // 数字宽度由图片比例推出（所有数字图尺寸一致）
+            if (combo != lastComboShown)
+            {
+                comboTextCache = combo.ToString();
+                lastComboShown = combo;
+            }
+
             var reference = comboDigitSprites[0];
             var referenceSize = reference != null ? reference.bounds.size : Vector3.one;
             var digitWidth = ComboDigitHeight * referenceSize.x / Mathf.Max(0.0001f, referenceSize.y);
 
-            var text = combo.ToString();
-            var count = Mathf.Min(text.Length, comboDigits.Count);
+            var count = Mathf.Min(comboTextCache.Length, comboDigits.Count);
             var totalWidth = count * digitWidth + (count - 1) * ComboDigitGap;
             var startX = -totalWidth * 0.5f + digitWidth * 0.5f;
 
@@ -692,7 +638,7 @@ namespace RhythmPlayer.Play
                     continue;
                 }
 
-                var sprite = comboDigitSprites[text[i] - '0'];
+                var sprite = comboDigitSprites[comboTextCache[i] - '0'];
                 digit.gameObject.SetActive(true);
                 digit.sprite = sprite != null ? sprite : SpriteFactory.Square();
                 digit.color = new Color(1f, 1f, 1f, ComboDigitAlpha);
@@ -701,7 +647,6 @@ namespace RhythmPlayer.Play
                 digit.transform.localPosition = new Vector3(startX + i * (digitWidth + ComboDigitGap), ComboCenterY, 0f);
             }
 
-            // 连击标记（数字上方的小字）
             if (comboTagSprite != null)
             {
                 comboTag.gameObject.SetActive(true);
@@ -716,25 +661,27 @@ namespace RhythmPlayer.Play
                 comboTag.gameObject.SetActive(false);
             }
 
-            // 增长时的轻微弹跳（整组缩放）
             var pulse = 1f + 0.12f * comboPulse * comboPulse;
             comboRoot.transform.localScale = new Vector3(pulse, pulse, 1f);
         }
 
-        // ===== 输入（键盘 + 触摸） =====
-
         void HandleInput()
         {
+            var keys = judgeKeys;
+            if (keys != null)
+            {
+                for (var i = 0; i < padFlashes.Length && i < keys.Length; i++)
+                {
+                    if (Input.GetKeyDown(keys[i]))
+                    {
+                        padFlashTimer[i] = 0.18f;
+                        if (ready && !autoPlay && clock != null && clock.IsRunning) TryJudgeByInput(i);
+                    }
+                }
+            }
+
             for (var i = 0; i < padFlashes.Length; i++)
             {
-                // 键盘按下：高亮判定点；手动模式下触发判定
-                if (judgeKeys != null && i < judgeKeys.Length && Input.GetKeyDown(judgeKeys[i]))
-                {
-                    padFlashTimer[i] = 0.18f;
-                    if (ready && !autoPlay && clock != null) TryJudgeByInput(i);
-                }
-
-                // 判定点高亮淡出
                 if (padFlashTimer[i] > 0f)
                 {
                     padFlashTimer[i] -= Time.deltaTime;
@@ -750,7 +697,6 @@ namespace RhythmPlayer.Play
 
             HandleTouch();
 
-            // Tab：自动演示 / 手动游玩 切换
             if (Input.GetKeyDown(KeyCode.Tab))
             {
                 autoPlay = !autoPlay;
@@ -758,7 +704,6 @@ namespace RhythmPlayer.Play
             }
         }
 
-        /// <summary>触摸输入：手机多点触控逐点判定；没有触摸时用鼠标左键兜底（方便电脑调试）</summary>
         void HandleTouch()
         {
             if (!touchEnabled) return;
@@ -777,10 +722,9 @@ namespace RhythmPlayer.Play
             }
         }
 
-        /// <summary>屏幕坐标 → 世界坐标，命中半径内最近的判定点则触发该键</summary>
         void TryPadAtScreenPoint(Vector2 screenPoint)
         {
-            var cam = Camera.main;
+            var cam = MainCamera;
             if (cam == null) return;
 
             var world = cam.ScreenToWorldPoint(new Vector3(screenPoint.x, screenPoint.y, -cam.transform.position.z));
@@ -797,10 +741,8 @@ namespace RhythmPlayer.Play
             if (nearest < 0) return;
 
             padFlashTimer[nearest] = 0.18f;
-            if (ready && !autoPlay && clock != null) TryJudgeByInput(nearest);
+            if (ready && !autoPlay && clock != null && clock.IsRunning) TryJudgeByInput(nearest);
         }
-
-        // ===== 视图构建 =====
 
         NoteView CreateView()
         {
@@ -816,14 +758,12 @@ namespace RhythmPlayer.Play
             };
         }
 
-        /// <summary>设置精灵：有皮肤用皮肤（白色 tint 保留原色），没有则用纯色方块兜底</summary>
         void SetSprite(SpriteRenderer renderer, Sprite sprite, Color fallbackColor)
         {
             renderer.sprite = sprite != null ? sprite : SpriteFactory.Square();
             renderer.color = sprite != null ? Color.white : fallbackColor;
         }
 
-        /// <summary>摆放音符（头/尾）：按目标宽度等比缩放，可附加出生动画的缩放与透明度</summary>
         void PlaceNote(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float fallbackHeight, float scale, float alpha)
         {
             renderer.transform.localPosition = position;
@@ -842,7 +782,6 @@ namespace RhythmPlayer.Play
             renderer.transform.localScale = baseScale * scale;
         }
 
-        /// <summary>摆放长条身体：沿径向拉伸（长度 = 拍数 × 每拍距离）</summary>
         void PlaceBody(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float length)
         {
             renderer.transform.localPosition = position;
@@ -856,7 +795,6 @@ namespace RhythmPlayer.Play
             renderer.transform.localScale = new Vector3(width / Mathf.Max(0.0001f, size.x), length / Mathf.Max(0.0001f, size.y), 1f);
         }
 
-        /// <summary>双押连线：附着在其中一个音符视图上，连接两个判定点（临近判定点时显示）</summary>
         void UpdateBothLine(NoteView view, float apothem, float headDist)
         {
             var note = view.Note;
@@ -891,26 +829,22 @@ namespace RhythmPlayer.Play
             return renderer;
         }
 
-        /// <summary>键位（0-5）对应的向外单位方向</summary>
         static Vector3 PadDirection(int lane)
         {
             var radians = PadAngleDeg[Mathf.Clamp(lane, 0, 5)] * Mathf.Deg2Rad;
             return new Vector3(Mathf.Cos(radians), Mathf.Sin(radians), 0f);
         }
 
-        /// <summary>键位（0-5）判定点的世界坐标</summary>
         Vector3 PadPosition(int lane) => PadDirection(lane) * (hexRadius * 0.866f);
 
-        /// <summary>搭建静态视觉：背景、六边形外框、出生区轮廓、判定点高亮</summary>
         void BuildVisuals()
         {
-            var cam = Camera.main;
+            var cam = MainCamera;
             var viewHeight = cam != null && cam.orthographic ? cam.orthographicSize * 2f : 11.6f;
             var viewWidth = viewHeight * Screen.width / Mathf.Max(1, Screen.height);
 
             if (backgroundSprite != null)
             {
-                // 默认背景（歌曲没带背景时用），实际换曲时由 RefreshBackground 替换
                 backgroundRenderer = CreateQuad(transform, "Background", -10, new Color(0.65f, 0.65f, 0.75f));
                 backgroundRenderer.sprite = backgroundSprite;
                 var size = backgroundSprite.bounds.size;
@@ -925,13 +859,11 @@ namespace RhythmPlayer.Play
                 var size = hexFrameSprite.bounds.size;
                 var frameScale = hexRadius * 2f / Mathf.Max(0.0001f, Mathf.Max(size.x, size.y));
 
-                // 外六边形框
                 var frame = CreateQuad(transform, "HexFrame", -5, Color.white);
                 frame.sprite = hexFrameSprite;
                 frame.transform.localPosition = new Vector3(0f, 0f, 1f);
                 frame.transform.localScale = new Vector3(frameScale, frameScale, 1f);
 
-                // 中心出生区（小六边形轮廓）
                 if (showSpawnZone)
                 {
                     var zone = CreateQuad(transform, "SpawnZone", -4, new Color(0.6f, 0.9f, 1f, 0.22f));
@@ -942,7 +874,6 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            // 六个判定点的按下高亮
             for (var i = 0; i < padFlashes.Length; i++)
             {
                 var flash = CreateQuad(transform, "PadFlash" + (i + 1), 3, new Color(0.55f, 0.95f, 1f, 0f));
@@ -952,7 +883,6 @@ namespace RhythmPlayer.Play
                 padFlashes[i] = flash;
             }
 
-            // 正中心连击显示：渲染顺序 2（低于音符的 9-11，所以音符会盖在连击数字上面）
             comboRoot = new GameObject("ComboDisplay");
             comboRoot.transform.SetParent(transform, false);
             comboRoot.transform.localPosition = Vector3.zero;
@@ -969,21 +899,22 @@ namespace RhythmPlayer.Play
             comboTag.gameObject.SetActive(false);
         }
 
-        /// <summary>预生成判定点标签文字（避免每帧创建字符串）</summary>
         void BuildPadLabels()
         {
             padLabelTexts = new string[6];
-            for (var i = 0; i < 6; i++) padLabelTexts[i] = $"{i + 1} ({KeyLabel(i)})";
+            var showKeys = Application.platform != RuntimePlatform.Android;
+            for (var i = 0; i < 6; i++)
+            {
+                padLabelTexts[i] = showKeys ? $"{i + 1} ({KeyLabel(i)})" : (i + 1).ToString();
+            }
         }
-
-        // ===== HUD（OnGUI） =====
 
         void OnGUI()
         {
-            var cam = Camera.main;
-            if (cam == null || !ready) return; // 只有在装载了曲子后才画 HUD
+            if (!ready) return;
+            var cam = MainCamera;
+            if (cam == null) return;
 
-            // 样式（懒创建）
             labelStyle ??= UiTheme.PadLabelStyle();
             percentStyle ??= new GUIStyle(GUI.skin.label)
             {
@@ -993,7 +924,6 @@ namespace RhythmPlayer.Play
                 normal = { textColor = new Color(0.92f, 0.97f, 1f, 0.92f) },
             };
 
-            // 判定点标签（编号 + 按键）
             if (showPadLabels && padLabelTexts != null)
             {
                 for (var i = 0; i < 6; i++)
@@ -1004,17 +934,24 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            // 右上角：准确率百分比（连击数字是中心的世界精灵，见 UpdateComboDisplay）
-            GUI.Label(new Rect(Screen.width - 340f, 16f, 320f, 40f), $"{Accuracy * 100f:0.00}%", percentStyle);
+            var accuracy = Accuracy;
+            if (!Mathf.Approximately(accuracy, lastAccuracy))
+            {
+                lastAccuracy = accuracy;
+                percentText = (accuracy * 100f).ToString("0.00") + "%";
+            }
+            GUI.Label(new Rect(Screen.width - 340f, 16f, 320f, 40f), percentText, percentStyle);
         }
 
-        /// <summary>按键显示名（逗号/句号显示为符号）</summary>
         string KeyLabel(int index)
         {
-            if (judgeKeys == null || index >= judgeKeys.Length) return "-";
-            var key = judgeKeys[index];
+            var key = GetJudgeKey(index);
+            if (key == KeyCode.None) return "-";
             if (key == KeyCode.Comma) return ",";
             if (key == KeyCode.Period) return ".";
+            if (key == KeyCode.Semicolon) return ";";
+            if (key == KeyCode.Slash) return "/";
+            if (key == KeyCode.Quote) return "'";
             return key.ToString();
         }
     }

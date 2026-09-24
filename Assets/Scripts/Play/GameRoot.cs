@@ -8,26 +8,18 @@ using UnityEngine.Networking;
 
 namespace RhythmPlayer.Play
 {
-    /// <summary>
-    /// 游戏入口：负责"选曲界面 → 游玩 → 结算"的状态切换。
-    /// - 启动时扫描歌曲目录（Songs/），列出所有已导入的歌曲（含 .zip / .mcz 自动解压导入）
-    /// - 选曲：数字键 1-9 / 鼠标或触摸点击；-= 调音量，[ ] 调下落速度（即时保存）
-    /// - 选曲后从磁盘加载音频（UnityWebRequest，支持玩家自己放歌进来），再让 Playfield 解析谱面
-    /// - 整曲播完进入结算面板（Enter / 点击返回）；游玩中按 Esc 直接返回选曲
-    /// 界面为简洁科技风：背景渐变 + 细网格 + 圆角面板（全部由 UiTheme 用代码绘制）。
-    /// </summary>
     public sealed class GameRoot : MonoBehaviour
     {
-        /// <summary>界面状态</summary>
         enum State
         {
-            SongSelect, // 选曲界面
-            Loading,    // 正在加载歌曲（音频解码）
-            Playing,    // 游玩中
-            Result,     // 结算面板
+            SongSelect,
+            Loading,
+            Playing,
+            Paused,
+            Settings,
+            Result,
         }
 
-        /// <summary>结算数据快照（进结算时从面板抄下来，之后清场会重置统计）</summary>
         sealed class ResultData
         {
             public string SongName;
@@ -41,9 +33,13 @@ namespace RhythmPlayer.Play
             public int Total;
         }
 
-        // 设置项的 PlayerPrefs 键（重启后仍然生效）
         const string VolumeKey = "RhythmPlayer.Volume";
         const string SpeedKey = "RhythmPlayer.Speed";
+        const string FpsKey = "RhythmPlayer.FpsIndex";
+        const string PerfKey = "RhythmPlayer.PerformanceMode";
+        const string KeyPrefix = "RhythmPlayer.Key";
+
+        static readonly int[] FpsPresets = { 60, 90, 120, 144, 165, 240, 300 };
 
         [Header("引用")]
         [SerializeField] Playfield playfield;
@@ -51,12 +47,17 @@ namespace RhythmPlayer.Play
 
         readonly List<SongInfo> songs = new List<SongInfo>();
         State state = State.SongSelect;
+        State settingsReturn = State.SongSelect;
         SongInfo currentSong;
         ResultData result;
         string loadingText = "";
-        float volume = 1f;       // 音量（0-1）
-        float noteSpeed = 2.4f;  // 下落速度（每拍距离）
-        float resultTimer;       // 结算界面的防误触计时
+        float volume = 1f;
+        float noteSpeed = 2.4f;
+        int fpsIndex = FpsPresets.Length - 1;
+        bool performanceMode = true;
+        int rebindLane = -1;
+        float resultTimer;
+        float maxDriftMs;
 
         GUIStyle titleStyle;
         GUIStyle rowStyle;
@@ -67,56 +68,155 @@ namespace RhythmPlayer.Play
         GUIStyle resultTitleStyle;
         GUIStyle resultRankStyle;
         GUIStyle resultRowStyle;
+        GUIStyle smallButtonStyle;
+        GUIStyle menuButtonStyle;
+        GUIStyle menuTitleStyle;
+        GUIStyle settingsLabelStyle;
+        GUIStyle settingsValueStyle;
+        GUIStyle rebindHintStyle;
+
+        static bool IsTouchPlatform =>
+            Application.platform == RuntimePlatform.Android || Application.platform == RuntimePlatform.IPhonePlayer;
 
         void Start()
         {
-            // 引用缺省时自动在场景里找
             if (playfield == null) playfield = FindObjectOfType<Playfield>();
             if (clock == null) clock = FindObjectOfType<SongClock>();
 
-            // 读取并应用设置（音量 / 下落速度）
             volume = PlayerPrefs.GetFloat(VolumeKey, 1f);
             noteSpeed = PlayerPrefs.GetFloat(SpeedKey, playfield != null ? playfield.NoteSpeed : 2.4f);
+            fpsIndex = Mathf.Clamp(PlayerPrefs.GetInt(FpsKey, FpsPresets.Length - 1), 0, FpsPresets.Length - 1);
+            performanceMode = PlayerPrefs.GetInt(PerfKey, 1) != 0;
+            LoadKeyBindings();
+
+            Screen.sleepTimeout = SleepTimeout.NeverSleep;
             ApplySettings();
 
+            StartCoroutine(StartupRoutine());
+        }
+
+        void LoadKeyBindings()
+        {
+            if (playfield == null) return;
+            for (var i = 0; i < 6; i++)
+            {
+                var stored = PlayerPrefs.GetInt(KeyPrefix + i, (int)playfield.GetJudgeKey(i));
+                if (stored != 0) playfield.SetJudgeKey(i, (KeyCode)stored);
+            }
+        }
+
+        IEnumerator StartupRoutine()
+        {
+            loadingText = "正在准备歌曲资源";
+            yield return SongRepository.PrepareRoutine();
+            loadingText = "";
             RefreshSongs();
             EnterSongSelect();
         }
 
-        // ===== 设置 =====
-
-        /// <summary>应用设置：音量走 AudioListener（全局生效），下落速度给面板</summary>
         void ApplySettings()
         {
             AudioListener.volume = Mathf.Clamp01(volume);
             if (playfield != null) playfield.SetNoteSpeed(noteSpeed);
+            ApplyFrameRate();
+            ApplyPerformanceMode();
         }
 
-        /// <summary>保存设置到本机（PlayerPrefs）</summary>
+        void ApplyFrameRate()
+        {
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = FpsPresets[fpsIndex];
+        }
+
+        void ApplyPerformanceMode()
+        {
+            if (performanceMode)
+            {
+                QualitySettings.shadows = ShadowQuality.Disable;
+                QualitySettings.antiAliasing = 0;
+                QualitySettings.pixelLightCount = 0;
+                QualitySettings.particleRaycastBudget = 0;
+                QualitySettings.softParticles = false;
+            }
+            else
+            {
+                QualitySettings.shadows = ShadowQuality.HardOnly;
+                QualitySettings.antiAliasing = 2;
+                QualitySettings.pixelLightCount = 4;
+                QualitySettings.particleRaycastBudget = 256;
+                QualitySettings.softParticles = true;
+            }
+        }
+
         void SaveSettings()
         {
             PlayerPrefs.SetFloat(VolumeKey, volume);
             PlayerPrefs.SetFloat(SpeedKey, noteSpeed);
+            PlayerPrefs.SetInt(FpsKey, fpsIndex);
+            PlayerPrefs.SetInt(PerfKey, performanceMode ? 1 : 0);
             PlayerPrefs.Save();
         }
 
-        /// <summary>选曲界面的设置按键：-= 调音量，[ ] 调下落速度；改动即时保存</summary>
-        void HandleSettingsKeys()
+        void AdjustVolume(float delta)
         {
-            var changed = false;
-            if (Input.GetKeyDown(KeyCode.Minus)) { volume = Mathf.Clamp01(volume - 0.05f); changed = true; }
-            if (Input.GetKeyDown(KeyCode.Equals)) { volume = Mathf.Clamp01(volume + 0.05f); changed = true; }
-            if (Input.GetKeyDown(KeyCode.LeftBracket)) { noteSpeed = Mathf.Clamp(noteSpeed - 0.1f, 0.6f, 6f); changed = true; }
-            if (Input.GetKeyDown(KeyCode.RightBracket)) { noteSpeed = Mathf.Clamp(noteSpeed + 0.1f, 0.6f, 6f); changed = true; }
-            if (!changed) return;
-
+            volume = Mathf.Clamp01(volume + delta);
             ApplySettings();
             SaveSettings();
         }
 
-        // ===== 歌曲列表与状态切换 =====
+        void AdjustSpeed(float delta)
+        {
+            noteSpeed = Mathf.Clamp(noteSpeed + delta, 0.6f, 6f);
+            ApplySettings();
+            SaveSettings();
+        }
 
-        /// <summary>重新扫描歌曲目录（歌曲包放进 Songs/ 后重启即可出现）</summary>
+        void AdjustFps(int delta)
+        {
+            fpsIndex = (fpsIndex + delta + FpsPresets.Length) % FpsPresets.Length;
+            ApplyFrameRate();
+            SaveSettings();
+        }
+
+        void TogglePerformanceMode()
+        {
+            performanceMode = !performanceMode;
+            ApplyPerformanceMode();
+            SaveSettings();
+        }
+
+        void AssignKey(int lane, KeyCode key)
+        {
+            if (playfield == null)
+            {
+                rebindLane = -1;
+                return;
+            }
+
+            var previous = playfield.GetJudgeKey(lane);
+            for (var i = 0; i < 6; i++)
+            {
+                if (i != lane && playfield.GetJudgeKey(i) == key)
+                {
+                    playfield.SetJudgeKey(i, previous);
+                    PlayerPrefs.SetInt(KeyPrefix + i, (int)previous);
+                }
+            }
+
+            playfield.SetJudgeKey(lane, key);
+            PlayerPrefs.SetInt(KeyPrefix + lane, (int)key);
+            PlayerPrefs.Save();
+            rebindLane = -1;
+        }
+
+        void HandleSettingsKeys()
+        {
+            if (Input.GetKeyDown(KeyCode.Minus)) AdjustVolume(-0.05f);
+            if (Input.GetKeyDown(KeyCode.Equals)) AdjustVolume(0.05f);
+            if (Input.GetKeyDown(KeyCode.LeftBracket)) AdjustSpeed(-0.1f);
+            if (Input.GetKeyDown(KeyCode.RightBracket)) AdjustSpeed(0.1f);
+        }
+
         void RefreshSongs()
         {
             songs.Clear();
@@ -124,58 +224,93 @@ namespace RhythmPlayer.Play
             Debug.Log($"[选曲] 已导入 {songs.Count} 首歌曲（目录:{SongRepository.Root}）");
         }
 
-        /// <summary>回到选曲界面：停止播放并清空音符</summary>
         void EnterSongSelect()
         {
             state = State.SongSelect;
             loadingText = "";
             result = null;
+            rebindLane = -1;
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
         }
 
+        void PauseGame()
+        {
+            if (state != State.Playing || clock == null) return;
+            clock.Pause();
+            state = State.Paused;
+        }
+
+        void ResumeGame()
+        {
+            if (clock != null) clock.Resume();
+            state = State.Playing;
+        }
+
+        void RestartSong()
+        {
+            maxDriftMs = 0f;
+            if (clock != null) clock.PlayFrom(0.0);
+            state = State.Playing;
+        }
+
+        void OnApplicationPause(bool pauseStatus)
+        {
+            if (pauseStatus && state == State.Playing) PauseGame();
+        }
+
         void Update()
         {
-            if (state == State.SongSelect)
+            switch (state)
             {
-                HandleSettingsKeys();
-
-                // 数字键 1-9 直接选歌（列表最多显示 9 项）
-                for (var i = 0; i < songs.Count && i < 9; i++)
-                {
-                    if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + i)))
+                case State.SongSelect:
+                    HandleSettingsKeys();
+                    for (var i = 0; i < songs.Count && i < 9; i++)
                     {
-                        StartSong(i);
-                        return;
+                        if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + i)))
+                        {
+                            StartSong(i);
+                            return;
+                        }
                     }
-                }
-            }
-            else if (state == State.Playing)
-            {
-                // Esc 直接返回选曲；整曲播完进入结算
-                if (Input.GetKeyDown(KeyCode.Escape)) EnterSongSelect();
-                else if (clock != null && clock.IsFinished) ShowResult();
-            }
-            else if (state == State.Result)
-            {
-                // 防误触：面板出现 0.5 秒后才接受确认
-                resultTimer += Time.unscaledDeltaTime;
-                if (resultTimer > 0.5f && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)
-                    || Input.GetKeyDown(KeyCode.Escape) || Input.GetMouseButtonDown(0)))
-                {
-                    EnterSongSelect();
-                }
+                    break;
+
+                case State.Playing:
+                    TrackDrift();
+                    if (Input.GetKeyDown(KeyCode.Space)) { PauseGame(); break; }
+                    if (Input.GetKeyDown(KeyCode.R)) { RestartSong(); break; }
+                    if (Input.GetKeyDown(KeyCode.Escape)) { PauseGame(); break; }
+                    if (clock != null && clock.IsFinished) ShowResult();
+                    break;
+
+                case State.Paused:
+                    if (Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.Escape)) ResumeGame();
+                    break;
+
+                case State.Result:
+                    resultTimer += Time.unscaledDeltaTime;
+                    if (resultTimer > 0.5f && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)
+                        || Input.GetKeyDown(KeyCode.Escape) || Input.GetMouseButtonDown(0)))
+                    {
+                        EnterSongSelect();
+                    }
+                    break;
             }
         }
 
-        /// <summary>开始播放第 index 首歌（鼠标/触摸点击与数字键都会走到这里）</summary>
+        void TrackDrift()
+        {
+            if (clock == null || !clock.IsRunning || clock.SourceTime <= 0.1) return;
+            var drift = Mathf.Abs((float)(clock.SongTime - clock.SourceTime)) * 1000f;
+            if (drift < 500f) maxDriftMs = Mathf.Max(maxDriftMs, drift);
+        }
+
         public void StartSong(int index)
         {
             if (state == State.Loading || index < 0 || index >= songs.Count) return;
             StartCoroutine(LoadAndPlay(songs[index]));
         }
 
-        /// <summary>异步加载音频并开始游玩</summary>
         IEnumerator LoadAndPlay(SongInfo song)
         {
             state = State.Loading;
@@ -183,7 +318,6 @@ namespace RhythmPlayer.Play
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
 
-            // UnityWebRequest 读取本地文件需要 file:/// 前缀，并且路径用正斜杠
             var url = "file:///" + song.AudioPath.Replace('\\', '/');
             using (var request = UnityWebRequestMultimedia.GetAudioClip(url, GuessAudioType(song.AudioPath)))
             {
@@ -199,14 +333,14 @@ namespace RhythmPlayer.Play
                 var clip = DownloadHandlerAudioClip.GetContent(request);
                 loadingText = "";
                 currentSong = song;
-                clock.LoadClip(clip, song.Bpm, song.FirstTime); // 换音频 + BPM + 拍偏移
-                playfield.LoadSong(song);                        // 解析谱面、换背景、清场
-                clock.PlayFrom(0.0);                             // 从头开始播放
+                maxDriftMs = 0f;
+                clock.LoadClip(clip, song.Bpm, song.FirstTime);
+                playfield.LoadSong(song);
+                clock.PlayFrom(0.0);
                 state = State.Playing;
             }
         }
 
-        /// <summary>进入结算界面：把面板统计抄进快照（之后清场会重置统计）</summary>
         void ShowResult()
         {
             result = new ResultData
@@ -222,11 +356,10 @@ namespace RhythmPlayer.Play
                 Total = playfield != null ? playfield.TotalNotes : 0,
             };
             resultTimer = 0f;
-            if (clock != null) clock.Stop(); // 停止音频（画面保留最后一帧）
+            if (clock != null) clock.Stop();
             state = State.Result;
         }
 
-        /// <summary>评级：S ≥95%，A ≥90%，B ≥80%，C ≥70%，其余 D</summary>
         static string RankOf(float accuracy)
         {
             if (accuracy >= 0.95f) return "S";
@@ -236,7 +369,6 @@ namespace RhythmPlayer.Play
             return "D";
         }
 
-        /// <summary>按扩展名猜测音频编码类型</summary>
         static AudioType GuessAudioType(string path)
         {
             switch (Path.GetExtension(path).ToLowerInvariant())
@@ -247,34 +379,217 @@ namespace RhythmPlayer.Play
             }
         }
 
-        // ===== 界面 =====
-
         void OnGUI()
         {
-            // 游玩中有自己的 HUD，这里不画
-            if (state == State.Playing) return;
-
-            UiTheme.DrawBackdrop(); // 渐变 + 网格背景
-
             if (state == State.Result)
             {
+                UiTheme.DrawBackdrop();
                 DrawResult();
                 return;
             }
 
-            // ---- 选曲 / 加载界面 ----
+            if (state == State.Settings)
+            {
+                UiTheme.DrawBackdrop();
+                DrawSettings();
+                return;
+            }
+
+            if (state == State.SongSelect || state == State.Loading)
+            {
+                UiTheme.DrawBackdrop();
+                DrawSongSelect();
+                return;
+            }
+
+            DrawPauseButton();
+            if (state == State.Paused) DrawPauseMenu();
+        }
+
+        void DrawPauseButton()
+        {
+            if (state != State.Playing) return;
+            smallButtonStyle ??= UiTheme.SmallButtonStyle();
+            if (GUI.Button(new Rect(16f, 16f, 120f, 54f), "暂停", smallButtonStyle)) PauseGame();
+        }
+
+        void DrawPauseMenu()
+        {
+            resultPanelStyle ??= UiTheme.PanelStyle();
+            menuButtonStyle ??= UiTheme.MenuButtonStyle();
+            menuTitleStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 34,
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = UiTheme.TextMain },
+            };
+
+            GUI.color = new Color(0f, 0f, 0f, 0.55f);
+            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+
+            var panel = new Rect((Screen.width - 440f) * 0.5f, (Screen.height - 560f) * 0.5f, 440f, 560f);
+            GUI.Box(panel, GUIContent.none, resultPanelStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 34f, panel.width, 44f), "已暂停", menuTitleStyle);
+
+            const float buttonWidth = 360f;
+            const float buttonHeight = 76f;
+            const float buttonGap = 18f;
+            var left = panel.x + (panel.width - buttonWidth) * 0.5f;
+            var top = panel.y + 120f;
+
+            if (GUI.Button(new Rect(left, top, buttonWidth, buttonHeight), "继续", menuButtonStyle)) ResumeGame();
+            if (GUI.Button(new Rect(left, top + (buttonHeight + buttonGap), buttonWidth, buttonHeight), "重开", menuButtonStyle)) RestartSong();
+            if (GUI.Button(new Rect(left, top + 2f * (buttonHeight + buttonGap), buttonWidth, buttonHeight), "设置", menuButtonStyle))
+            {
+                settingsReturn = State.Paused;
+                state = State.Settings;
+            }
+            if (GUI.Button(new Rect(left, top + 3f * (buttonHeight + buttonGap), buttonWidth, buttonHeight), "退出（返回选曲）", menuButtonStyle)) EnterSongSelect();
+        }
+
+        void DrawSettings()
+        {
+            resultPanelStyle ??= UiTheme.PanelStyle();
+            menuButtonStyle ??= UiTheme.MenuButtonStyle();
+            menuTitleStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 34,
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = UiTheme.TextMain },
+            };
+            settingsLabelStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 22,
+                alignment = TextAnchor.MiddleLeft,
+                normal = { textColor = UiTheme.TextMain },
+            };
+            settingsValueStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 22,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = UiTheme.Accent },
+            };
+            rebindHintStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 20,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = UiTheme.Accent },
+            };
+            hintStyle ??= UiTheme.HintStyle();
+
+            if (rebindLane >= 0)
+            {
+                var e = Event.current;
+                if (e != null && e.type == EventType.KeyDown)
+                {
+                    if (e.keyCode == KeyCode.Escape) rebindLane = -1;
+                    else if (e.keyCode != KeyCode.None && e.keyCode != KeyCode.Tab) AssignKey(rebindLane, e.keyCode);
+                    e.Use();
+                }
+            }
+
+            var panelHeight = Mathf.Min(Screen.height - 20f, 700f);
+            var panel = new Rect((Screen.width - 760f) * 0.5f, (Screen.height - panelHeight) * 0.5f, 760f, panelHeight);
+            GUI.Box(panel, GUIContent.none, resultPanelStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 14f, panel.width, 44f), "设置", menuTitleStyle);
+
+            var left = panel.x + 50f;
+            var rowY = panel.y + 64f;
+            const float rowHeight = 54f;
+
+            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "音量", settingsLabelStyle);
+            if (GUI.Button(new Rect(left + 240f, rowY, 72f, 50f), "－", menuButtonStyle)) AdjustVolume(-0.05f);
+            GUI.Label(new Rect(left + 322f, rowY, 150f, rowHeight), $"{volume * 100f:0}%", settingsValueStyle);
+            if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustVolume(0.05f);
+
+            rowY += 60f;
+            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "下落速度", settingsLabelStyle);
+            if (GUI.Button(new Rect(left + 240f, rowY, 72f, 50f), "－", menuButtonStyle)) AdjustSpeed(-0.1f);
+            GUI.Label(new Rect(left + 322f, rowY, 150f, rowHeight), $"{noteSpeed:0.0}×", settingsValueStyle);
+            if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustSpeed(0.1f);
+
+            rowY += 60f;
+            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "最高帧率", settingsLabelStyle);
+            if (GUI.Button(new Rect(left + 240f, rowY, 72f, 50f), "－", menuButtonStyle)) AdjustFps(-1);
+            GUI.Label(new Rect(left + 322f, rowY, 150f, rowHeight), $"{FpsPresets[fpsIndex]}", settingsValueStyle);
+            if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustFps(1);
+
+            rowY += 60f;
+            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "性能模式", settingsLabelStyle);
+            if (GUI.Button(new Rect(left + 240f, rowY, 314f, 50f), performanceMode ? "开（低占用，更流畅）" : "关（默认画质）", menuButtonStyle)) TogglePerformanceMode();
+
+            rowY += 68f;
+            GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), "—— 按键映射（点后按新键，Esc 取消）——", hintStyle);
+
+            rowY += 30f;
+            const float cellWidth = 330f;
+            const float cellHeight = 48f;
+            for (var row = 0; row < 3; row++)
+            {
+                for (var column = 0; column < 2; column++)
+                {
+                    var lane = row + column * 3;
+                    var rect = new Rect(left + column * (cellWidth + 10f), rowY + row * 54f, cellWidth, cellHeight);
+                    var label = rebindLane == lane ? $"{lane + 1}：请按新键…" : $"{lane + 1}：{KeyDisplay(playfield != null ? playfield.GetJudgeKey(lane) : KeyCode.None)}";
+                    if (GUI.Button(rect, label, smallButtonStyle ??= UiTheme.SmallButtonStyle()))
+                    {
+                        rebindLane = lane;
+                    }
+                }
+            }
+
+            rowY += 3f * 54f + 14f;
+            var songTime = clock != null ? clock.SongTime : 0.0;
+            var beat = clock != null ? clock.Beat : 0.0;
+            var bpm = clock != null ? clock.Bpm : 0f;
+            GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), $"歌曲时间 {songTime:F3} s      拍数 {beat:F2}      BPM {bpm:F0}      时钟偏差 {maxDriftMs:F1} ms", hintStyle);
+
+            rowY += 30f;
+            var hintLine = IsTouchPlatform
+                ? "触摸六边形上的判定点即可打击；左上角按钮暂停"
+                : "空格 暂停/继续 · R 重开 · Esc 暂停菜单 · Tab 自动/手动 · 也可直接触摸判定点";
+            GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), hintLine, hintStyle);
+
+            if (GUI.Button(new Rect(panel.x + (panel.width - 240f) * 0.5f, panel.y + panelHeight - 66f, 240f, 52f), "返回", menuButtonStyle))
+            {
+                state = settingsReturn;
+            }
+        }
+
+        static string KeyDisplay(KeyCode key)
+        {
+            if (key == KeyCode.None) return "-";
+            if (key == KeyCode.Comma) return ",";
+            if (key == KeyCode.Period) return ".";
+            if (key == KeyCode.Semicolon) return ";";
+            if (key == KeyCode.Slash) return "/";
+            if (key == KeyCode.Quote) return "'";
+            if (key == KeyCode.Space) return "空格";
+            if (key == KeyCode.LeftShift) return "左Shift";
+            if (key == KeyCode.RightShift) return "右Shift";
+            if (key == KeyCode.UpArrow) return "↑";
+            if (key == KeyCode.DownArrow) return "↓";
+            if (key == KeyCode.LeftArrow) return "←";
+            if (key == KeyCode.RightArrow) return "→";
+            return key.ToString();
+        }
+
+        void DrawSongSelect()
+        {
             titleStyle ??= UiTheme.TitleStyle();
             rowStyle ??= UiTheme.RowStyle();
             emptyRowStyle ??= UiTheme.EmptyRowStyle();
             hintStyle ??= UiTheme.HintStyle();
             loadingStyle ??= UiTheme.LoadingStyle();
+            smallButtonStyle ??= UiTheme.SmallButtonStyle();
 
-            // 标题区
             GUI.Label(new Rect(0f, Screen.height * 0.075f, Screen.width, 62f), "RHYTHM PLAYER", titleStyle);
             GUI.Label(new Rect(0f, Screen.height * 0.075f + 58f, Screen.width, 28f), "六边形音游播放器", hintStyle);
             GUI.DrawTexture(new Rect(Screen.width * 0.5f - 180f, Screen.height * 0.075f + 100f, 360f, 2f), UiTheme.AccentLine());
 
-            // 歌曲列表：固定展示至少 4 个槽位（1-4），没有歌曲的槽位给出导入提示
             const float rowWidth = 880f;
             const float rowHeight = 56f;
             const float rowGap = 14f;
@@ -291,7 +606,7 @@ namespace RhythmPlayer.Play
                     var artist = string.IsNullOrEmpty(song.Artist) ? "未知曲师" : song.Artist;
                     var notes = song.NoteCount > 0 ? $"      {song.NoteCount} 音符" : "";
                     var text = $"{i + 1:00}    {song.Name}      —  {artist}      BPM {song.Bpm:0}{notes}";
-                    if (GUI.Button(rect, text, rowStyle)) StartSong(i); // 鼠标点击 / 触摸点击
+                    if (GUI.Button(rect, text, rowStyle)) StartSong(i);
                 }
                 else
                 {
@@ -299,14 +614,19 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            // 底部提示 + 当前设置
-            GUI.Label(new Rect(0f, Screen.height - 84f, Screen.width, 24f),
-                "数字键 1-4（最多 9）选歌   ·   鼠标 / 触摸点击列表   ·   游玩中 Esc 返回选曲   ·   Tab 切换自动 / 手动",
-                hintStyle);
+            var selectHint = IsTouchPlatform
+                ? "点按歌曲开始    ·    游玩中左上角可暂停    ·    右下角设置"
+                : "数字键 1-4（最多 9）选歌    ·    鼠标 / 触摸点击列表    ·    游玩中左上角可暂停";
+            GUI.Label(new Rect(0f, Screen.height - 84f, Screen.width, 24f), selectHint, hintStyle);
             GUI.Label(new Rect(0f, Screen.height - 56f, Screen.width, 24f),
-                $"音量 {volume * 100f:0}%（- = 调整）        下落速度 {noteSpeed:0.0}×（[ ] 调整）", hintStyle);
+                $"音量 {volume * 100f:0}%        下落速度 {noteSpeed:0.0}×        帧率上限 {FpsPresets[fpsIndex]}", hintStyle);
 
-            // 加载中提示（带点动画）
+            if (GUI.Button(new Rect(Screen.width - 150f, Screen.height - 130f, 130f, 56f), "设置", smallButtonStyle))
+            {
+                settingsReturn = State.SongSelect;
+                state = State.Settings;
+            }
+
             if (!string.IsNullOrEmpty(loadingText))
             {
                 var dots = new string('.', 1 + (int)(Time.unscaledTime * 3f) % 3);
@@ -314,7 +634,6 @@ namespace RhythmPlayer.Play
             }
         }
 
-        /// <summary>结算面板：评级 / 分数 / 准确率 / 最大连击 / 判定统计</summary>
         void DrawResult()
         {
             if (result == null) return;
@@ -339,6 +658,7 @@ namespace RhythmPlayer.Play
                 alignment = TextAnchor.MiddleCenter,
                 normal = { textColor = UiTheme.TextMain },
             };
+            hintStyle ??= UiTheme.HintStyle();
 
             var panelRect = new Rect((Screen.width - 640f) * 0.5f, (Screen.height - 520f) * 0.5f, 640f, 520f);
             GUI.Box(panelRect, GUIContent.none, resultPanelStyle);
@@ -351,7 +671,8 @@ namespace RhythmPlayer.Play
             GUI.Label(new Rect(panelRect.x, panelRect.y + 336f, panelRect.width, 30f),
                 $"Best {result.Best}     Cool {result.Cool}     Good {result.Good}     Miss {result.Miss}", resultRowStyle);
             GUI.Label(new Rect(panelRect.x, panelRect.y + 368f, panelRect.width, 30f), $"（共 {result.Total} 音符）", resultRowStyle);
-            GUI.Label(new Rect(panelRect.x, panelRect.y + 448f, panelRect.width, 26f), "Enter / 点击任意处 返回选曲", hintStyle ?? UiTheme.HintStyle());
+            GUI.Label(new Rect(panelRect.x, panelRect.y + 448f, panelRect.width, 26f),
+                IsTouchPlatform ? "点击任意处 返回选曲" : "Enter / 点击任意处 返回选曲", hintStyle);
         }
     }
 }

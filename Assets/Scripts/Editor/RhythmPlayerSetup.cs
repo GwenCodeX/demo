@@ -65,6 +65,7 @@ namespace RhythmPlayer.EditorTools
             EditorSceneManager.SaveScene(scene, DemoScenePath);
 
             // 窗口化运行，1280x720，可缩放
+            PlayerSettings.productName = "RhythmPlayer";
             PlayerSettings.fullScreenMode = FullScreenMode.Windowed;
             PlayerSettings.defaultScreenWidth = 1280;
             PlayerSettings.defaultScreenHeight = 720;
@@ -84,6 +85,91 @@ namespace RhythmPlayer.EditorTools
             if (result == BuildResult.Succeeded) CopySongsToBuild(output); // 歌曲包放到 exe 旁边
             Debug.Log($"[BuildDemo] 打包结果：{result}，产物：{output}");
             EditorApplication.Exit(result == BuildResult.Succeeded ? 0 : 1);
+        }
+
+        /// <summary>
+        /// 批处理打包安卓（APK）：
+        ///   Tuanjie.exe -batchmode -quit -projectPath &lt;工程&gt; -executeMethod RhythmPlayer.EditorTools.RhythmPlayerSetup.BuildAndroid
+        /// 歌包会随包内置（StreamingAssets），安卓首次运行时自动释放到可写目录。
+        /// </summary>
+        public static void BuildAndroid()
+        {
+            // 1. 同步歌包 + 清单到 StreamingAssets
+            SyncStreamingSongs();
+
+            // 2. 切换到安卓目标（首次切换会触发一次完整重新导入，比较慢）
+            if (!EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android))
+            {
+                Debug.LogError("[BuildAndroid] 切换安卓目标失败：请确认已安装 Android Build Support 模块");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            // 3. 安卓玩家设置：横屏、包名、Mono 后端（构建快，方便测试）
+            PlayerSettings.productName = "RhythmPlayer";
+            PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
+            PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.gwencodex.rhythmplayer");
+            PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.Mono2x);
+            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARMv7 | AndroidArchitecture.ARM64;
+            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel24;
+
+            // 4. 搭建场景并打包
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+            BuildSceneInto();
+            Directory.CreateDirectory("Assets/Scenes");
+            EditorSceneManager.SaveScene(scene, DemoScenePath);
+
+            var output = Path.GetFullPath("Build/Android/RhythmDemo.apk");
+            Directory.CreateDirectory(Path.GetDirectoryName(output));
+            var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
+            {
+                scenes = new[] { DemoScenePath },
+                locationPathName = output,
+                target = BuildTarget.Android,
+                options = BuildOptions.None,
+            });
+
+            var result = report.summary.result;
+            Debug.Log($"[BuildAndroid] 打包结果：{result}，产物：{output}");
+            EditorApplication.Exit(result == BuildResult.Succeeded ? 0 : 1);
+        }
+
+        /// <summary>把 Assets/Songs 的内容同步到 Assets/StreamingAssets（含清单），供安卓内置</summary>
+        static void SyncStreamingSongs()
+        {
+            // 整个 StreamingAssets 都是构建时生成的，先清空重建
+            if (Directory.Exists("Assets/StreamingAssets")) Directory.Delete("Assets/StreamingAssets", true);
+            var targetRoot = "Assets/StreamingAssets/Songs";
+            Directory.CreateDirectory(targetRoot);
+
+            var manifest = new List<string>();
+
+            // 根目录下的文件（zip / mcz 等）
+            foreach (var file in Directory.GetFiles(SongsFolder))
+            {
+                if (file.EndsWith(".meta")) continue;
+                var name = Path.GetFileName(file);
+                File.Copy(file, Path.Combine(targetRoot, name), true);
+                manifest.Add(name);
+            }
+
+            // 歌曲文件夹（含子目录）
+            foreach (var dir in Directory.GetDirectories(SongsFolder))
+            {
+                if (Path.GetFileName(dir).StartsWith("_")) continue; // 跳过缓存目录
+                foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                {
+                    if (file.EndsWith(".meta")) continue;
+                    var relative = Path.GetRelativePath(SongsFolder, file).Replace('\\', '/');
+                    var destination = Path.Combine(targetRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? targetRoot);
+                    File.Copy(file, destination, true);
+                    manifest.Add(relative);
+                }
+            }
+
+            File.WriteAllLines("Assets/StreamingAssets/" + SongRepository.ManifestName, manifest);
+            Debug.Log($"[BuildAndroid] 已同步 {manifest.Count} 个内置歌曲文件到 StreamingAssets");
         }
 
         /// <summary>把 Assets/Songs 下的歌曲包复制到打包输出目录的 Songs 子目录（排除 .meta）</summary>
@@ -223,7 +309,6 @@ namespace RhythmPlayer.EditorTools
             source.volume = 0.8f;
             conductor.AddComponent<SongClock>();
             conductor.AddComponent<Metronome>();
-            conductor.AddComponent<ClockDebugOverlay>();
 
             Undo.RegisterCreatedObjectUndo(conductor, "Build Player Scene");
             return conductor.GetComponent<SongClock>();

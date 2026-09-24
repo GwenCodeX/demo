@@ -71,3 +71,6 @@ crashlytics-build.properties
 # 自动生成的临时 Android 资源
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# 构建时生成（安卓内置歌包与清单），不入库
+/Assets/StreamingAssets/

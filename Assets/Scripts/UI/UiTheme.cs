@@ -75,6 +75,30 @@ namespace RhythmPlayer.UI
             normal = { textColor = TextDim },
         };
 
+        /// <summary>小按钮（暂停键等）</summary>
+        public static GUIStyle SmallButtonStyle() => new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 22,
+            alignment = TextAnchor.MiddleCenter,
+            normal = { background = RowNormal(), textColor = TextMain },
+            hover = { background = RowHover(), textColor = TextMain },
+            active = { background = RowActive(), textColor = TextMain },
+            border = new RectOffset(14, 14, 14, 14),
+            padding = new RectOffset(10, 10, 6, 6),
+        };
+
+        /// <summary>菜单大按钮（暂停菜单四项等，触摸友好）</summary>
+        public static GUIStyle MenuButtonStyle() => new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 26,
+            alignment = TextAnchor.MiddleCenter,
+            normal = { background = RowNormal(), textColor = TextMain },
+            hover = { background = RowHover(), textColor = TextMain },
+            active = { background = RowActive(), textColor = TextMain },
+            border = new RectOffset(14, 14, 14, 14),
+            padding = new RectOffset(14, 14, 10, 10),
+        };
+
         /// <summary>判定点的编号/按键标签</summary>
         public static GUIStyle PadLabelStyle() => new GUIStyle(GUI.skin.label)
         {
