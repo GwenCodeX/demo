@@ -29,6 +29,9 @@ namespace RhythmPlayer.Core
 
         public AudioSource Source => source;
         public bool IsRunning => running;
+
+        /// <summary>是否已装入音频（选曲界面判断能否直接开始）</summary>
+        public bool HasClip => source != null && source.clip != null;
         public float Bpm => bpm;
         public float SecondsPerBeat => 60f / bpm;
 

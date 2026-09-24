@@ -75,6 +75,30 @@ namespace RhythmPlayer.UI
             normal = { textColor = TextDim },
         };
 
+        /// <summary>歌曲行按钮·选中态</summary>
+        public static GUIStyle RowSelectedStyle() => new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 20,
+            alignment = TextAnchor.MiddleLeft,
+            normal = { background = RowActive(), textColor = TextMain },
+            hover = { background = RowActive(), textColor = TextMain },
+            active = { background = RowActive(), textColor = TextMain },
+            border = new RectOffset(14, 14, 14, 14),
+            padding = new RectOffset(18, 12, 6, 6),
+        };
+
+        /// <summary>歌曲行按钮·普通态（小菜单用）</summary>
+        public static GUIStyle MenuRowStyle() => new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 20,
+            alignment = TextAnchor.MiddleLeft,
+            normal = { background = RowNormal(), textColor = TextMain },
+            hover = { background = RowHover(), textColor = TextMain },
+            active = { background = RowActive(), textColor = TextMain },
+            border = new RectOffset(14, 14, 14, 14),
+            padding = new RectOffset(18, 12, 6, 6),
+        };
+
         /// <summary>小按钮（暂停键等）</summary>
         public static GUIStyle SmallButtonStyle() => new GUIStyle(GUI.skin.button)
         {

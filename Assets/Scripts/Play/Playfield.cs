@@ -230,6 +230,8 @@ namespace RhythmPlayer.Play
 
         public void SetNoteSpeed(float value) => unitsPerBeat = Mathf.Clamp(value, 0.6f, 6f);
 
+        public void SetAutoPlay(bool value) => autoPlay = value;
+
         public KeyCode GetJudgeKey(int lane)
         {
             if (judgeKeys == null || lane < 0 || lane >= judgeKeys.Length) return KeyCode.None;

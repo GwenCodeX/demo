@@ -12,11 +12,13 @@ namespace RhythmPlayer.Play
     {
         enum State
         {
+            MainMenu,
             SongSelect,
             Loading,
             Playing,
             Paused,
             Settings,
+            Import,
             Result,
         }
 
@@ -45,12 +47,17 @@ namespace RhythmPlayer.Play
         [SerializeField] Playfield playfield;
         [SerializeField] SongClock clock;
 
+        [Header("试听片段（秒）")]
+        [SerializeField] float previewStartSeconds = 30f;
+        [SerializeField] float previewLengthSeconds = 20f;
+
         readonly List<SongInfo> songs = new List<SongInfo>();
-        State state = State.SongSelect;
-        State settingsReturn = State.SongSelect;
+        State state = State.MainMenu;
+        State settingsReturn = State.MainMenu;
         SongInfo currentSong;
         ResultData result;
         string loadingText = "";
+        string importMessage = "";
         float volume = 1f;
         float noteSpeed = 2.4f;
         int fpsIndex = FpsPresets.Length - 1;
@@ -58,6 +65,11 @@ namespace RhythmPlayer.Play
         int rebindLane = -1;
         float resultTimer;
         float maxDriftMs;
+        int selectedIndex;
+        int loadedIndex = -1;
+        bool previewActive;
+        float previewStartTime;
+        float menuAnim;
 
         GUIStyle titleStyle;
         GUIStyle rowStyle;
@@ -74,6 +86,13 @@ namespace RhythmPlayer.Play
         GUIStyle settingsLabelStyle;
         GUIStyle settingsValueStyle;
         GUIStyle rebindHintStyle;
+        GUIStyle menuRowStyle;
+        GUIStyle menuRowSelectedStyle;
+        GUIStyle songNameStyle;
+        GUIStyle songInfoStyle;
+        GUIStyle pathStyle;
+        GUIStyle selectTitleStyle;
+        GUIStyle previewLabelStyle;
 
         static bool IsTouchPlatform =>
             Application.platform == RuntimePlatform.Android || Application.platform == RuntimePlatform.IPhonePlayer;
@@ -111,7 +130,7 @@ namespace RhythmPlayer.Play
             yield return SongRepository.PrepareRoutine();
             loadingText = "";
             RefreshSongs();
-            EnterSongSelect();
+            EnterMainMenu();
         }
 
         void ApplySettings()
@@ -224,14 +243,53 @@ namespace RhythmPlayer.Play
             Debug.Log($"[选曲] 已导入 {songs.Count} 首歌曲（目录:{SongRepository.Root}）");
         }
 
+        void EnterMainMenu()
+        {
+            state = State.MainMenu;
+            rebindLane = -1;
+            previewActive = false;
+            loadingText = "";
+            result = null;
+            if (clock != null) clock.Stop();
+            if (playfield != null) playfield.ClearForSelect();
+        }
+
         void EnterSongSelect()
         {
             state = State.SongSelect;
+            rebindLane = -1;
+            previewActive = false;
             loadingText = "";
             result = null;
-            rebindLane = -1;
+            menuAnim = 0f;
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
+
+            if (songs.Count > 0)
+            {
+                selectedIndex = Mathf.Clamp(selectedIndex, 0, songs.Count - 1);
+                SelectSong(selectedIndex);
+            }
+        }
+
+        void SelectSong(int index)
+        {
+            if (index < 0 || index >= songs.Count || state == State.Loading) return;
+            selectedIndex = index;
+            StartCoroutine(LoadSongRoutine(index, true));
+        }
+
+        void StartSelectedSong()
+        {
+            if (songs.Count == 0 || state == State.Loading) return;
+            if (loadedIndex == selectedIndex && clock != null && clock.HasClip)
+            {
+                previewActive = false;
+                clock.PlayFrom(0.0);
+                state = State.Playing;
+                return;
+            }
+            StartCoroutine(LoadSongRoutine(Mathf.Clamp(selectedIndex, 0, songs.Count - 1), false));
         }
 
         void PauseGame()
@@ -269,10 +327,21 @@ namespace RhythmPlayer.Play
                     {
                         if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + i)))
                         {
-                            StartSong(i);
+                            SelectSong(i);
                             return;
                         }
                     }
+                    if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter) || Input.GetKeyDown(KeyCode.Space))
+                    {
+                        StartSelectedSong();
+                        break;
+                    }
+                    if (Input.GetKeyDown(KeyCode.Escape)) EnterMainMenu();
+                    UpdatePreviewLoop();
+                    break;
+
+                case State.Import:
+                    if (Input.GetKeyDown(KeyCode.Escape)) EnterMainMenu();
                     break;
 
                 case State.Playing:
@@ -287,6 +356,10 @@ namespace RhythmPlayer.Play
                     if (Input.GetKeyDown(KeyCode.Space) || Input.GetKeyDown(KeyCode.Escape)) ResumeGame();
                     break;
 
+                case State.Settings:
+                    if (rebindLane < 0 && Input.GetKeyDown(KeyCode.Escape)) state = settingsReturn;
+                    break;
+
                 case State.Result:
                     resultTimer += Time.unscaledDeltaTime;
                     if (resultTimer > 0.5f && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)
@@ -295,6 +368,25 @@ namespace RhythmPlayer.Play
                         EnterSongSelect();
                     }
                     break;
+            }
+
+            if ((state == State.SongSelect || state == State.Loading) && menuAnim < 1f)
+            {
+                menuAnim = Mathf.Min(1f, menuAnim + Time.unscaledDeltaTime / 0.35f);
+            }
+        }
+
+        void UpdatePreviewLoop()
+        {
+            if (!previewActive || clock == null) return;
+            if (clock.IsFinished)
+            {
+                clock.PlayFrom(previewStartTime);
+                return;
+            }
+            if (clock.IsRunning && clock.SongTime > previewStartTime + previewLengthSeconds)
+            {
+                clock.PlayFrom(previewStartTime);
             }
         }
 
@@ -305,16 +397,12 @@ namespace RhythmPlayer.Play
             if (drift < 500f) maxDriftMs = Mathf.Max(maxDriftMs, drift);
         }
 
-        public void StartSong(int index)
+        IEnumerator LoadSongRoutine(int index, bool preview)
         {
-            if (state == State.Loading || index < 0 || index >= songs.Count) return;
-            StartCoroutine(LoadAndPlay(songs[index]));
-        }
-
-        IEnumerator LoadAndPlay(SongInfo song)
-        {
+            var song = songs[index];
             state = State.Loading;
-            loadingText = $"正在加载「{song.Name}」";
+            previewActive = false;
+            loadingText = preview ? $"载入试听「{song.Name}」" : $"正在加载「{song.Name}」";
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
 
@@ -324,8 +412,9 @@ namespace RhythmPlayer.Play
                 yield return request.SendWebRequest();
                 if (request.result != UnityWebRequest.Result.Success)
                 {
-                    loadingText = $"音频加载失败：{request.error}";
+                    loadingText = "音频加载失败：" + request.error;
                     Debug.LogError("[选曲] " + loadingText);
+                    loadedIndex = -1;
                     state = State.SongSelect;
                     yield break;
                 }
@@ -334,10 +423,23 @@ namespace RhythmPlayer.Play
                 loadingText = "";
                 currentSong = song;
                 maxDriftMs = 0f;
+                loadedIndex = index;
                 clock.LoadClip(clip, song.Bpm, song.FirstTime);
                 playfield.LoadSong(song);
-                clock.PlayFrom(0.0);
-                state = State.Playing;
+
+                if (preview)
+                {
+                    playfield.SetAutoPlay(true);
+                    previewStartTime = Mathf.Clamp(previewStartSeconds, 0f, Mathf.Max(0f, clip.length - previewLengthSeconds - 1f));
+                    previewActive = true;
+                    clock.PlayFrom(previewStartTime);
+                    state = State.SongSelect;
+                }
+                else
+                {
+                    clock.PlayFrom(0.0);
+                    state = State.Playing;
+                }
             }
         }
 
@@ -379,31 +481,146 @@ namespace RhythmPlayer.Play
             }
         }
 
+        void OpenSongsFolder()
+        {
+            try
+            {
+                var path = SongRepository.Root;
+                Directory.CreateDirectory(path);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[导入] 打开目录失败：" + e.Message);
+            }
+        }
+
         void OnGUI()
         {
-            if (state == State.Result)
+            switch (state)
             {
-                UiTheme.DrawBackdrop();
-                DrawResult();
-                return;
-            }
+                case State.Result:
+                    UiTheme.DrawBackdrop();
+                    DrawResult();
+                    return;
 
-            if (state == State.Settings)
-            {
-                UiTheme.DrawBackdrop();
-                DrawSettings();
-                return;
-            }
+                case State.Settings:
+                    UiTheme.DrawBackdrop();
+                    DrawSettings();
+                    return;
 
-            if (state == State.SongSelect || state == State.Loading)
-            {
-                UiTheme.DrawBackdrop();
-                DrawSongSelect();
-                return;
+                case State.MainMenu:
+                    UiTheme.DrawBackdrop();
+                    DrawMainMenu();
+                    return;
+
+                case State.Import:
+                    UiTheme.DrawBackdrop();
+                    DrawImport();
+                    return;
+
+                case State.SongSelect:
+                case State.Loading:
+                    UiTheme.DrawBackdrop();
+                    DrawSongSelect();
+                    return;
             }
 
             DrawPauseButton();
             if (state == State.Paused) DrawPauseMenu();
+        }
+
+        void DrawMainMenu()
+        {
+            titleStyle ??= UiTheme.TitleStyle();
+            hintStyle ??= UiTheme.HintStyle();
+            menuButtonStyle ??= UiTheme.MenuButtonStyle();
+
+            GUI.Label(new Rect(0f, Screen.height * 0.15f, Screen.width, 66f), "RHYTHM PLAYER", titleStyle);
+            GUI.Label(new Rect(0f, Screen.height * 0.15f + 64f, Screen.width, 28f), "六边形音游播放器", hintStyle);
+            GUI.DrawTexture(new Rect(Screen.width * 0.5f - 180f, Screen.height * 0.15f + 106f, 360f, 2f), UiTheme.AccentLine());
+
+            const float buttonWidth = 420f;
+            const float buttonHeight = 84f;
+            const float buttonGap = 22f;
+            var left = (Screen.width - buttonWidth) * 0.5f;
+            var top = Screen.height * 0.37f;
+
+            if (GUI.Button(new Rect(left, top, buttonWidth, buttonHeight), $"游玩    （{songs.Count} 首）", menuButtonStyle)) EnterSongSelect();
+            if (GUI.Button(new Rect(left, top + (buttonHeight + buttonGap), buttonWidth, buttonHeight), "导入歌曲", menuButtonStyle))
+            {
+                importMessage = "";
+                state = State.Import;
+            }
+            if (GUI.Button(new Rect(left, top + 2f * (buttonHeight + buttonGap), buttonWidth, buttonHeight), "设置", menuButtonStyle))
+            {
+                settingsReturn = State.MainMenu;
+                state = State.Settings;
+            }
+
+            GUI.Label(new Rect(0f, Screen.height - 58f, Screen.width, 24f),
+                IsTouchPlatform ? "点按即可进入" : "鼠标 / 触摸点击    ·    游玩中左上角可暂停", hintStyle);
+        }
+
+        void DrawImport()
+        {
+            resultPanelStyle ??= UiTheme.PanelStyle();
+            menuTitleStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 34,
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = UiTheme.TextMain },
+            };
+            hintStyle ??= UiTheme.HintStyle();
+            menuButtonStyle ??= UiTheme.MenuButtonStyle();
+            smallButtonStyle ??= UiTheme.SmallButtonStyle();
+            settingsValueStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 22,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = UiTheme.Accent },
+            };
+            pathStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 16,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = UiTheme.TextDim },
+            };
+
+            var panel = new Rect((Screen.width - 940f) * 0.5f, (Screen.height - 480f) * 0.5f, 940f, 480f);
+            GUI.Box(panel, GUIContent.none, resultPanelStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 26f, panel.width, 44f), "导入歌曲", menuTitleStyle);
+
+            GUI.Label(new Rect(panel.x + 30f, panel.y + 100f, panel.width - 60f, 24f), "歌曲目录（把歌曲文件夹或 zip / mcz 歌包放进去）", hintStyle);
+            GUI.Label(new Rect(panel.x + 30f, panel.y + 132f, panel.width - 60f, 24f), SongRepository.Root, pathStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 176f, panel.width, 30f), $"当前识别 {songs.Count} 首歌曲", settingsValueStyle);
+
+            if (!string.IsNullOrEmpty(importMessage))
+            {
+                GUI.Label(new Rect(panel.x, panel.y + 214f, panel.width, 24f), importMessage, settingsValueStyle);
+            }
+
+            const float buttonWidth = 260f;
+            const float buttonHeight = 64f;
+            var buttonY = panel.y + panel.height - 110f;
+            var buttonCount = IsTouchPlatform ? 2 : 3;
+            const float gap = 20f;
+            var startX = panel.x + (panel.width - (buttonCount * buttonWidth + (buttonCount - 1) * gap)) * 0.5f;
+
+            var slot = 0;
+            if (!IsTouchPlatform)
+            {
+                if (GUI.Button(new Rect(startX + slot * (buttonWidth + gap), buttonY, buttonWidth, buttonHeight), "打开歌曲文件夹", smallButtonStyle)) OpenSongsFolder();
+                slot++;
+            }
+            if (GUI.Button(new Rect(startX + slot * (buttonWidth + gap), buttonY, buttonWidth, buttonHeight), "重新扫描", smallButtonStyle))
+            {
+                RefreshSongs();
+                importMessage = $"已重新扫描：识别到 {songs.Count} 首歌曲";
+            }
+            slot++;
+            if (GUI.Button(new Rect(startX + slot * (buttonWidth + gap), buttonY, buttonWidth, buttonHeight), "返回", smallButtonStyle)) EnterMainMenu();
         }
 
         void DrawPauseButton()
@@ -472,13 +689,8 @@ namespace RhythmPlayer.Play
                 alignment = TextAnchor.MiddleCenter,
                 normal = { textColor = UiTheme.Accent },
             };
-            rebindHintStyle ??= new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 20,
-                alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = UiTheme.Accent },
-            };
             hintStyle ??= UiTheme.HintStyle();
+            smallButtonStyle ??= UiTheme.SmallButtonStyle();
 
             if (rebindLane >= 0)
             {
@@ -534,10 +746,7 @@ namespace RhythmPlayer.Play
                     var lane = row + column * 3;
                     var rect = new Rect(left + column * (cellWidth + 10f), rowY + row * 54f, cellWidth, cellHeight);
                     var label = rebindLane == lane ? $"{lane + 1}：请按新键…" : $"{lane + 1}：{KeyDisplay(playfield != null ? playfield.GetJudgeKey(lane) : KeyCode.None)}";
-                    if (GUI.Button(rect, label, smallButtonStyle ??= UiTheme.SmallButtonStyle()))
-                    {
-                        rebindLane = lane;
-                    }
+                    if (GUI.Button(rect, label, smallButtonStyle)) rebindLane = lane;
                 }
             }
 
@@ -550,7 +759,7 @@ namespace RhythmPlayer.Play
             rowY += 30f;
             var hintLine = IsTouchPlatform
                 ? "触摸六边形上的判定点即可打击；左上角按钮暂停"
-                : "空格 暂停/继续 · R 重开 · Esc 暂停菜单 · Tab 自动/手动 · 也可直接触摸判定点";
+                : "空格 暂停/继续 · R 重开 · Esc 返回 · Tab 自动/手动";
             GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), hintLine, hintStyle);
 
             if (GUI.Button(new Rect(panel.x + (panel.width - 240f) * 0.5f, panel.y + panelHeight - 66f, 240f, 52f), "返回", menuButtonStyle))
@@ -580,52 +789,91 @@ namespace RhythmPlayer.Play
         void DrawSongSelect()
         {
             titleStyle ??= UiTheme.TitleStyle();
-            rowStyle ??= UiTheme.RowStyle();
-            emptyRowStyle ??= UiTheme.EmptyRowStyle();
             hintStyle ??= UiTheme.HintStyle();
             loadingStyle ??= UiTheme.LoadingStyle();
+            resultPanelStyle ??= UiTheme.PanelStyle();
+            menuButtonStyle ??= UiTheme.MenuButtonStyle();
             smallButtonStyle ??= UiTheme.SmallButtonStyle();
-
-            GUI.Label(new Rect(0f, Screen.height * 0.075f, Screen.width, 62f), "RHYTHM PLAYER", titleStyle);
-            GUI.Label(new Rect(0f, Screen.height * 0.075f + 58f, Screen.width, 28f), "六边形音游播放器", hintStyle);
-            GUI.DrawTexture(new Rect(Screen.width * 0.5f - 180f, Screen.height * 0.075f + 100f, 360f, 2f), UiTheme.AccentLine());
-
-            const float rowWidth = 880f;
-            const float rowHeight = 56f;
-            const float rowGap = 14f;
-            var left = (Screen.width - rowWidth) * 0.5f;
-            var top = Screen.height * 0.26f;
-
-            var rows = Mathf.Clamp(Mathf.Max(4, songs.Count), 4, 9);
-            for (var i = 0; i < rows; i++)
+            menuRowStyle ??= UiTheme.MenuRowStyle();
+            menuRowSelectedStyle ??= UiTheme.RowSelectedStyle();
+            songNameStyle ??= new GUIStyle(GUI.skin.label)
             {
-                var rect = new Rect(left, top + i * (rowHeight + rowGap), rowWidth, rowHeight);
-                if (i < songs.Count)
+                fontSize = 36,
+                alignment = TextAnchor.MiddleLeft,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = UiTheme.TextMain },
+            };
+            songInfoStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 20,
+                alignment = TextAnchor.MiddleLeft,
+                normal = { textColor = UiTheme.TextDim },
+            };
+
+            var eased = menuAnim * menuAnim * (3f - 2f * menuAnim);
+
+            selectTitleStyle ??= new GUIStyle(UiTheme.TitleStyle())
+            {
+                fontSize = 30,
+                alignment = TextAnchor.MiddleLeft,
+            };
+            GUI.Label(new Rect(40f, 26f, 500f, 44f), "RHYTHM PLAYER", selectTitleStyle);
+
+            var leftPanel = new Rect(70f, Screen.height * 0.28f, 620f, 340f);
+            GUI.Box(leftPanel, GUIContent.none, resultPanelStyle);
+
+            if (songs.Count > 0 && selectedIndex >= 0 && selectedIndex < songs.Count)
+            {
+                var song = songs[selectedIndex];
+                var artist = string.IsNullOrEmpty(song.Artist) ? "未知曲师" : song.Artist;
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 34f, leftPanel.width - 68f, 48f), song.Name, songNameStyle);
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 90f, leftPanel.width - 68f, 30f), artist, songInfoStyle);
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 124f, leftPanel.width - 68f, 30f),
+                    $"BPM {song.Bpm:0}" + (song.NoteCount > 0 ? $"      音符 {song.NoteCount}" : ""), songInfoStyle);
+                if (previewActive)
                 {
-                    var song = songs[i];
-                    var artist = string.IsNullOrEmpty(song.Artist) ? "未知曲师" : song.Artist;
-                    var notes = song.NoteCount > 0 ? $"      {song.NoteCount} 音符" : "";
-                    var text = $"{i + 1:00}    {song.Name}      —  {artist}      BPM {song.Bpm:0}{notes}";
-                    if (GUI.Button(rect, text, rowStyle)) StartSong(i);
+                    previewLabelStyle ??= new GUIStyle(GUI.skin.label)
+                    {
+                        fontSize = 20,
+                        alignment = TextAnchor.MiddleLeft,
+                        normal = { textColor = UiTheme.Accent },
+                    };
+                    GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 158f, leftPanel.width - 68f, 28f), "试听中……", previewLabelStyle);
                 }
-                else
-                {
-                    GUI.Label(rect, $"{i + 1:00}    （未导入 · 把歌曲文件夹或 zip / mcz 放进 Songs 目录）", emptyRowStyle);
-                }
+
+                if (GUI.Button(new Rect(leftPanel.x + 34f, leftPanel.y + 216f, 300f, 88f), "开始 ▶", menuButtonStyle)) StartSelectedSong();
+                if (GUI.Button(new Rect(leftPanel.x + 348f, leftPanel.y + 216f, 238f, 88f), "返回主菜单", smallButtonStyle)) EnterMainMenu();
             }
+            else
+            {
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 34f, leftPanel.width - 68f, 40f), "还没有导入歌曲", songNameStyle);
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 90f, leftPanel.width - 68f, 30f), "到「导入歌曲」里看看使用方法", songInfoStyle);
+                if (GUI.Button(new Rect(leftPanel.x + 34f, leftPanel.y + 216f, 552f, 88f), "返回主菜单", menuButtonStyle)) EnterMainMenu();
+            }
+
+            var menuWidth = 460f;
+            var menuX = Screen.width - menuWidth - 24f + (1f - eased) * (menuWidth + 60f);
+            GUI.color = new Color(1f, 1f, 1f, Mathf.Max(0.05f, eased));
+
+            GUI.Label(new Rect(menuX, 60f, menuWidth, 30f), "曲目列表", hintStyle);
+
+            var listTop = 100f;
+            var count = Mathf.Min(songs.Count, 9);
+            for (var i = 0; i < count; i++)
+            {
+                var song = songs[i];
+                var rect = new Rect(menuX, listTop + i * 62f, menuWidth, 52f);
+                var label = $"{i + 1:00}   {song.Name}";
+                var style = i == selectedIndex ? menuRowSelectedStyle : menuRowStyle;
+                if (GUI.Button(rect, label, style)) SelectSong(i);
+            }
+
+            GUI.color = Color.white;
 
             var selectHint = IsTouchPlatform
-                ? "点按歌曲开始    ·    游玩中左上角可暂停    ·    右下角设置"
-                : "数字键 1-4（最多 9）选歌    ·    鼠标 / 触摸点击列表    ·    游玩中左上角可暂停";
-            GUI.Label(new Rect(0f, Screen.height - 84f, Screen.width, 24f), selectHint, hintStyle);
-            GUI.Label(new Rect(0f, Screen.height - 56f, Screen.width, 24f),
-                $"音量 {volume * 100f:0}%        下落速度 {noteSpeed:0.0}×        帧率上限 {FpsPresets[fpsIndex]}", hintStyle);
-
-            if (GUI.Button(new Rect(Screen.width - 150f, Screen.height - 130f, 130f, 56f), "设置", smallButtonStyle))
-            {
-                settingsReturn = State.SongSelect;
-                state = State.Settings;
-            }
+                ? "点按曲目试听    ·    「开始」游玩    ·    Esc 返回"
+                : "点按曲目试听    ·    Enter 开始    ·    数字键选曲    ·    Esc 返回";
+            GUI.Label(new Rect(40f, Screen.height - 56f, Screen.width - 80f, 24f), selectHint, hintStyle);
 
             if (!string.IsNullOrEmpty(loadingText))
             {
