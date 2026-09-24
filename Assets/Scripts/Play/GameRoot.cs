@@ -69,7 +69,8 @@ namespace RhythmPlayer.Play
         int loadedIndex = -1;
         bool previewActive;
         float previewStartTime;
-        float menuAnim;
+        float menuTimer;
+        float selectionPop;
 
         GUIStyle titleStyle;
         GUIStyle rowStyle;
@@ -261,7 +262,7 @@ namespace RhythmPlayer.Play
             previewActive = false;
             loadingText = "";
             result = null;
-            menuAnim = 0f;
+            menuTimer = 0f;
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
 
@@ -276,6 +277,7 @@ namespace RhythmPlayer.Play
         {
             if (index < 0 || index >= songs.Count || state == State.Loading) return;
             selectedIndex = index;
+            selectionPop = 1f;
             StartCoroutine(LoadSongRoutine(index, true));
         }
 
@@ -370,10 +372,8 @@ namespace RhythmPlayer.Play
                     break;
             }
 
-            if ((state == State.SongSelect || state == State.Loading) && menuAnim < 1f)
-            {
-                menuAnim = Mathf.Min(1f, menuAnim + Time.unscaledDeltaTime / 0.35f);
-            }
+            if (selectionPop > 0f) selectionPop = Mathf.Max(0f, selectionPop - Time.unscaledDeltaTime * 2.2f);
+            if (state == State.SongSelect || state == State.Loading) menuTimer += Time.unscaledDeltaTime;
         }
 
         void UpdatePreviewLoop()
@@ -810,14 +810,35 @@ namespace RhythmPlayer.Play
                 normal = { textColor = UiTheme.TextDim },
             };
 
-            var eased = menuAnim * menuAnim * (3f - 2f * menuAnim);
-
             selectTitleStyle ??= new GUIStyle(UiTheme.TitleStyle())
             {
                 fontSize = 30,
                 alignment = TextAnchor.MiddleLeft,
             };
             GUI.Label(new Rect(40f, 26f, 500f, 44f), "RHYTHM PLAYER", selectTitleStyle);
+
+            DrawSelectedSongPanel();
+            DrawSongMenu();
+
+            var selectHint = IsTouchPlatform
+                ? "点按曲目试听    ·    「开始」游玩    ·    Esc 返回"
+                : "点按曲目试听    ·    Enter 开始    ·    数字键选曲    ·    Esc 返回";
+            GUI.Label(new Rect(40f, Screen.height - 56f, Screen.width - 80f, 24f), selectHint, hintStyle);
+
+            if (!string.IsNullOrEmpty(loadingText))
+            {
+                var dots = new string('.', 1 + (int)(Time.unscaledTime * 3f) % 3);
+                GUI.Box(new Rect((Screen.width - 520f) * 0.5f, Screen.height - 200f, 520f, 64f), loadingText + dots, loadingStyle);
+            }
+        }
+
+        void DrawSelectedSongPanel()
+        {
+            var ease = 1f - Mathf.Pow(1f - Mathf.Clamp01(menuTimer / 0.6f), 3f);
+            var previousColor = GUI.color;
+            var previousMatrix = GUI.matrix;
+            GUI.color = new Color(1f, 1f, 1f, ease);
+            GUI.matrix = Matrix4x4.Translate(new Vector3(0f, (1f - ease) * 46f, 0f));
 
             var leftPanel = new Rect(70f, Screen.height * 0.28f, 620f, 340f);
             GUI.Box(leftPanel, GUIContent.none, resultPanelStyle);
@@ -851,34 +872,62 @@ namespace RhythmPlayer.Play
                 if (GUI.Button(new Rect(leftPanel.x + 34f, leftPanel.y + 216f, 552f, 88f), "返回主菜单", menuButtonStyle)) EnterMainMenu();
             }
 
-            var menuWidth = 460f;
-            var menuX = Screen.width - menuWidth - 24f + (1f - eased) * (menuWidth + 60f);
-            GUI.color = new Color(1f, 1f, 1f, Mathf.Max(0.05f, eased));
+            GUI.matrix = previousMatrix;
+            GUI.color = previousColor;
+        }
 
-            GUI.Label(new Rect(menuX, 60f, menuWidth, 30f), "曲目列表", hintStyle);
+        void DrawSongMenu()
+        {
+            const float menuWidth = 460f;
+            const float rowHeight = 52f;
+            const float rowPitch = 62f;
+            const float rowStagger = 0.09f;
+            const float rowDuration = 0.5f;
+            const float listTop = 100f;
+            var menuX = Screen.width - menuWidth - 24f;
 
-            var listTop = 100f;
+            var headerEase = 1f - Mathf.Pow(1f - Mathf.Clamp01(menuTimer / 0.4f), 3f);
+            var previousColor = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, headerEase);
+            GUI.Label(new Rect(menuX + (1f - headerEase) * 60f, 60f, menuWidth, 30f), "曲目列表", hintStyle);
+            GUI.color = previousColor;
+
             var count = Mathf.Min(songs.Count, 9);
             for (var i = 0; i < count; i++)
             {
-                var song = songs[i];
-                var rect = new Rect(menuX, listTop + i * 62f, menuWidth, 52f);
-                var label = $"{i + 1:00}   {song.Name}";
-                var style = i == selectedIndex ? menuRowSelectedStyle : menuRowStyle;
-                if (GUI.Button(rect, label, style)) SelectSong(i);
-            }
+                var t = Mathf.Clamp01((menuTimer - i * rowStagger) / rowDuration);
+                if (t <= 0f) continue;
 
-            GUI.color = Color.white;
+                var ease = 1f - Mathf.Pow(1f - t, 3f);
+                var isSelected = i == selectedIndex;
+                var rect = new Rect(
+                    menuX + (1f - ease) * (menuWidth + 90f),
+                    listTop + i * rowPitch + Mathf.Sin(Mathf.PI * (1f - ease)) * -14f,
+                    menuWidth,
+                    rowHeight);
 
-            var selectHint = IsTouchPlatform
-                ? "点按曲目试听    ·    「开始」游玩    ·    Esc 返回"
-                : "点按曲目试听    ·    Enter 开始    ·    数字键选曲    ·    Esc 返回";
-            GUI.Label(new Rect(40f, Screen.height - 56f, Screen.width - 80f, 24f), selectHint, hintStyle);
+                var previousMatrix = GUI.matrix;
+                previousColor = GUI.color;
 
-            if (!string.IsNullOrEmpty(loadingText))
-            {
-                var dots = new string('.', 1 + (int)(Time.unscaledTime * 3f) % 3);
-                GUI.Box(new Rect((Screen.width - 520f) * 0.5f, Screen.height - 200f, 520f, 64f), loadingText + dots, loadingStyle);
+                var angle = (1f - ease) * -9f;
+                if (Mathf.Abs(angle) > 0.01f) GUIUtility.RotateAroundPivot(angle, rect.center);
+
+                if (isSelected)
+                {
+                    var pop = 1.06f + 0.10f * selectionPop;
+                    GUIUtility.ScaleAroundPivot(Vector2.one * (Mathf.Lerp(0.86f, 1f, ease) * pop), new Vector2(rect.xMax, rect.center.y));
+                }
+                else
+                {
+                    GUIUtility.ScaleAroundPivot(Vector2.one * Mathf.Lerp(0.86f, 1f, ease), rect.center);
+                }
+
+                GUI.color = new Color(1f, 1f, 1f, Mathf.Clamp01(t * 2f));
+                var label = $"{i + 1:00}   {songs[i].Name}";
+                if (GUI.Button(rect, label, isSelected ? menuRowSelectedStyle : menuRowStyle)) SelectSong(i);
+
+                GUI.matrix = previousMatrix;
+                GUI.color = previousColor;
             }
         }
 
