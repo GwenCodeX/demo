@@ -9,17 +9,23 @@ using UnityEngine;
 
 namespace RhythmPlayer.EditorTools
 {
+    /// <summary>
+    /// 场景搭建 / 一键打包工具。
+    /// 用法一（编辑器）：菜单 Tools → 音游播放器 → 搭建播放器场景（幂等，缺什么补什么）
+    /// 用法二（命令行打包）：
+    ///   Tuanjie.exe -batchmode -quit -projectPath &lt;工程&gt; -executeMethod RhythmPlayer.EditorTools.RhythmPlayerSetup.BuildDemo
+    /// 打包会把 Assets/Songs 里的歌曲包复制到 exe 同级的 Songs 目录（运行时由 SongRepository 扫描导入）。
+    /// </summary>
     public static class RhythmPlayerSetup
     {
-        const string SongFolder = "Assets/Songs/Sinsekai";
-        const string ChartFile = "C017.txt";
-        const float SongBpm = 193f;
-        const string SkinFolder = "Assets/Skins/ClassicDance3V";
+        const string SkinFolder = "Assets/Skins/ClassicDance3V"; // 皮肤素材目录
+        const string SongsFolder = "Assets/Songs";               // 歌曲包目录
         const string DemoScenePath = "Assets/Scenes/PlayerDemo.unity";
-        const int HitFxFrameCount = 8;
+        const int HitFxFrameCount = 8;                           // 打击特效帧数（hit-0 ~ hit-7）
 
         static readonly string[] SpriteFiles = BuildSpriteFileList();
 
+        /// <summary>需要用到的皮肤图片（导入时会统一改成 Sprite 格式）</summary>
         static string[] BuildSpriteFileList()
         {
             var list = new List<string>
@@ -45,11 +51,10 @@ namespace RhythmPlayer.EditorTools
         {
             BuildSceneInto();
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-            Debug.Log("场景就绪（sinsekai / BPM 193）。按 Play 开始；空格暂停/继续，R 重开，Tab 切换自动/手动。");
+            Debug.Log("场景就绪。按 Play 进入选曲界面：数字键/点击选歌；游玩中空格暂停、R 重开、Esc 返回、Tab 自动/手动。记得 Ctrl+S 保存场景。");
         }
 
-        /// 批处理打包入口：
-        /// Tuanjie.exe -batchmode -quit -projectPath <工程> -executeMethod RhythmPlayer.EditorTools.RhythmPlayerSetup.BuildDemo
+        /// <summary>批处理打包入口（见类注释）</summary>
         public static void BuildDemo()
         {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
@@ -57,6 +62,7 @@ namespace RhythmPlayer.EditorTools
             Directory.CreateDirectory("Assets/Scenes");
             EditorSceneManager.SaveScene(scene, DemoScenePath);
 
+            // 窗口化运行，1280x720，可缩放
             PlayerSettings.fullScreenMode = FullScreenMode.Windowed;
             PlayerSettings.defaultScreenWidth = 1280;
             PlayerSettings.defaultScreenHeight = 720;
@@ -73,24 +79,47 @@ namespace RhythmPlayer.EditorTools
             });
 
             var result = report.summary.result;
+            if (result == BuildResult.Succeeded) CopySongsToBuild(output); // 歌曲包放到 exe 旁边
             Debug.Log($"[BuildDemo] 打包结果：{result}，产物：{output}");
             EditorApplication.Exit(result == BuildResult.Succeeded ? 0 : 1);
         }
 
+        /// <summary>把 Assets/Songs 下的歌曲包复制到打包输出目录的 Songs 子目录（排除 .meta）</summary>
+        static void CopySongsToBuild(string outputExePath)
+        {
+            var targetRoot = Path.Combine(Path.GetDirectoryName(outputExePath) ?? ".", "Songs");
+            if (Directory.Exists(targetRoot)) Directory.Delete(targetRoot, true);
+            Directory.CreateDirectory(targetRoot);
+
+            if (!Directory.Exists(SongsFolder))
+            {
+                Debug.LogWarning($"[BuildDemo] 找不到歌曲目录 {SongsFolder}");
+                return;
+            }
+
+            foreach (var dir in Directory.GetDirectories(SongsFolder))
+            {
+                var target = Path.Combine(targetRoot, Path.GetFileName(dir));
+                Directory.CreateDirectory(target);
+                foreach (var file in Directory.GetFiles(dir))
+                {
+                    if (file.EndsWith(".meta")) continue;
+                    File.Copy(file, Path.Combine(target, Path.GetFileName(file)), true);
+                }
+            }
+            Debug.Log($"[BuildDemo] 歌曲包已复制到 {targetRoot}");
+        }
+
+        /// <summary>
+        /// 在当前场景里搭好整套对象（幂等：已存在的不重复创建，只更新引用）：
+        /// Conductor（时钟/节拍器/调试面板）+ Playfield（六边形面板）+ GameRoot（选曲入口）+ 相机。
+        /// </summary>
         static void BuildSceneInto()
         {
             EnsureSpriteImports();
 
-            var clip = AssetDatabase.LoadAssetAtPath<AudioClip>(SongFolder + "/audio.mp3");
-            var chart = AssetDatabase.LoadAssetAtPath<TextAsset>(SongFolder + "/" + ChartFile);
-            if (clip == null || chart == null)
-            {
-                Debug.LogError($"素材缺失：请确认 {SongFolder} 下有 audio.mp3 和 {ChartFile}");
-                return;
-            }
-
             var clock = Object.FindObjectOfType<SongClock>();
-            if (clock == null) clock = CreateConductor(clip);
+            if (clock == null) clock = CreateConductor();
             else Debug.Log("Conductor 已存在，跳过创建。");
 
             var playfield = Object.FindObjectOfType<Playfield>();
@@ -106,15 +135,14 @@ namespace RhythmPlayer.EditorTools
                 Debug.Log("Playfield 已存在，更新引用。");
             }
 
+            // 给面板挂上皮肤精灵与时钟引用
             var serialized = new SerializedObject(playfield);
             serialized.FindProperty("clock").objectReferenceValue = clock;
-            serialized.FindProperty("chartAsset").objectReferenceValue = chart;
             serialized.FindProperty("tapSprite").objectReferenceValue = LoadSprite(SkinFolder + "/tap.png");
             serialized.FindProperty("tapBothSprite").objectReferenceValue = LoadSprite(SkinFolder + "/tapboth.png");
             serialized.FindProperty("holdHeadSprite").objectReferenceValue = LoadSprite(SkinFolder + "/hold-0.png");
             serialized.FindProperty("holdBodySprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdbody.png");
             serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdend.png");
-            serialized.FindProperty("backgroundSprite").objectReferenceValue = LoadSprite(SongFolder + "/bg.jpg");
             serialized.FindProperty("hexFrameSprite").objectReferenceValue = LoadSprite(SkinFolder + "/lineout.png");
             serialized.FindProperty("bothLineSprite").objectReferenceValue = LoadSprite(SkinFolder + "/both line.png");
             serialized.FindProperty("bestSprite").objectReferenceValue = LoadSprite(SkinFolder + "/best.png");
@@ -128,19 +156,31 @@ namespace RhythmPlayer.EditorTools
             {
                 fxProperty.GetArrayElementAtIndex(i).objectReferenceValue = LoadSprite($"{SkinFolder}/hit-{i}.png");
             }
-
             serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            // 游戏入口（选曲界面）
+            var gameRoot = Object.FindObjectOfType<GameRoot>();
+            if (gameRoot == null)
+            {
+                var go = new GameObject("GameRoot");
+                gameRoot = go.AddComponent<GameRoot>();
+                Undo.RegisterCreatedObjectUndo(go, "Build Player Scene");
+            }
+            var serializedRoot = new SerializedObject(gameRoot);
+            serializedRoot.FindProperty("playfield").objectReferenceValue = playfield;
+            serializedRoot.FindProperty("clock").objectReferenceValue = clock;
+            serializedRoot.ApplyModifiedPropertiesWithoutUndo();
 
             SetupCamera();
         }
 
-        /// PNG/JPG 默认导入为 Texture，这里统一改成 Sprite 才能给 SpriteRenderer 用
+        /// <summary>PNG/JPG 默认导入为 Texture，这里统一改成 Sprite 才能给 SpriteRenderer 用</summary>
         static void EnsureSpriteImports()
         {
-            var paths = new List<string>(SpriteFiles) { SongFolder + "/bg.jpg" };
-            foreach (var path in paths)
+            foreach (var path in SpriteFiles)
             {
                 if (!(AssetImporter.GetAtPath(path) is TextureImporter importer)) continue;
+
                 var changed = false;
                 if (importer.textureType != TextureImporterType.Sprite) { importer.textureType = TextureImporterType.Sprite; changed = true; }
                 if (importer.spriteImportMode != SpriteImportMode.Single) { importer.spriteImportMode = SpriteImportMode.Single; changed = true; }
@@ -153,26 +193,22 @@ namespace RhythmPlayer.EditorTools
 
         static Sprite LoadSprite(string path) => AssetDatabase.LoadAssetAtPath<Sprite>(path);
 
-        static SongClock CreateConductor(AudioClip clip)
+        /// <summary>创建 Conductor：音频源（音频在选曲后由 SongClock.LoadClip 换入）+ 时钟 + 节拍器 + 调试面板</summary>
+        static SongClock CreateConductor()
         {
             var conductor = new GameObject("Conductor");
             var source = conductor.AddComponent<AudioSource>();
-            source.clip = clip;
             source.playOnAwake = false;
             source.volume = 0.8f;
             conductor.AddComponent<SongClock>();
             conductor.AddComponent<Metronome>();
             conductor.AddComponent<ClockDebugOverlay>();
 
-            var serialized = new SerializedObject(conductor.GetComponent<SongClock>());
-            serialized.FindProperty("bpm").floatValue = SongBpm;
-            serialized.FindProperty("firstBeatOffsetSeconds").floatValue = 0f;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-
             Undo.RegisterCreatedObjectUndo(conductor, "Build Player Scene");
             return conductor.GetComponent<SongClock>();
         }
 
+        /// <summary>相机：正交投影，黑背景，位置对准面板中心</summary>
         static void SetupCamera()
         {
             var camera = Camera.main;

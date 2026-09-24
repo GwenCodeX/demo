@@ -2,9 +2,12 @@ using UnityEngine;
 
 namespace RhythmPlayer.Core
 {
+    /// <summary>
     /// 音游时钟：以 AudioSettings.dspTime 为唯一时间基准，与音频硬件采样对齐，不受帧率影响。
     /// 注意：dspTime 是按音频缓冲"跳着"更新的（约几毫秒一步），逐帧直接读取会让画面一顿一顿；
     /// 所以这里用帧时钟逐帧推进、再缓慢向 dspTime 回正的方式输出平滑时间。
+    /// 换曲由 LoadClip 完成（音频、BPM、拍偏移一起换）。
+    /// </summary>
     [RequireComponent(typeof(AudioSource))]
     public sealed class SongClock : MonoBehaviour
     {
@@ -13,37 +16,41 @@ namespace RhythmPlayer.Core
 
         [Header("歌曲参数")]
         [SerializeField] AudioSource source;
-        [Tooltip("BPM（来自 musicInfo.json）")]
+        [Tooltip("BPM（换曲时由 LoadClip 覆盖）")]
         [SerializeField] float bpm = 182f;
         [Tooltip("第 0 拍对应的歌曲时间（秒）")]
         [SerializeField] float firstBeatOffsetSeconds;
 
-        double anchorDsp;
-        double pauseTime;
-        double smoothingTime;
-        bool started;
-        bool running;
+        double anchorDsp;       // 歌曲时间 0 对应的 dspTime 锚点
+        double pauseTime;       // 暂停时的歌曲时间
+        double smoothingTime;   // 逐帧平滑后的歌曲时间
+        bool started;           // 是否装载过歌曲（允许 Resume）
+        bool running;           // 是否正在播放
 
         public AudioSource Source => source;
         public bool IsRunning => running;
         public float Bpm => bpm;
         public float SecondsPerBeat => 60f / bpm;
 
-        /// 当前歌曲时间（秒，已平滑，逐帧连续）
+        /// <summary>当前歌曲时间（秒，已平滑，逐帧连续）</summary>
         public double SongTime => running ? smoothingTime : pauseTime;
 
-        /// AudioSource 自身报告的播放位置，用于校验时钟偏差
+        /// <summary>AudioSource 自身报告的播放位置，用于校验时钟偏差</summary>
         public double SourceTime => source != null && source.clip != null ? source.time : 0.0;
 
-        /// 当前拍数（含小数，可为负）
+        /// <summary>当前拍数（含小数，可为负）</summary>
         public double Beat => SecondsToBeat(SongTime);
 
+        /// <summary>歌曲是否已播完</summary>
         public bool IsFinished => started && running && source != null && source.clip != null && !source.isPlaying;
 
+        /// <summary>拍 → 秒（含拍偏移）</summary>
         public double BeatToSeconds(double beat) => firstBeatOffsetSeconds + beat * SecondsPerBeat;
+
+        /// <summary>秒 → 拍（含拍偏移）</summary>
         public double SecondsToBeat(double seconds) => (seconds - firstBeatOffsetSeconds) / SecondsPerBeat;
 
-        /// 把歌曲时间换算为 dspTime（用于 PlayScheduled 前瞻调度，保持采样级精度）
+        /// <summary>把歌曲时间换算为 dspTime（用于 PlayScheduled 前瞻调度，保持采样级精度）</summary>
         public double DspTimeAt(double songSeconds) => anchorDsp + songSeconds;
 
         void Awake()
@@ -59,15 +66,39 @@ namespace RhythmPlayer.Core
                 return;
             }
 
-            var raw = AudioSettings.dspTime - anchorDsp;
+            var raw = AudioSettings.dspTime - anchorDsp;   // 音频硬件的真实时间（有台阶）
             var delta = Time.unscaledDeltaTime;
-            smoothingTime += delta;
+            smoothingTime += delta;                        // 帧时钟推进（连续）
             var error = raw - smoothingTime;
             smoothingTime = System.Math.Abs(error) > SnapThreshold
-                ? raw
-                : smoothingTime + error * System.Math.Min(1.0, delta * CorrectionRate);
+                ? raw                                      // 偏差太大（跳转/重开）→ 直接对齐
+                : smoothingTime + error * System.Math.Min(1.0, delta * CorrectionRate); // 缓慢回正
         }
 
+        /// <summary>装载新曲目：换音频、BPM 与拍偏移（选曲后由 GameRoot 调用）</summary>
+        public void LoadClip(AudioClip clip, float newBpm, float beatOffsetSeconds)
+        {
+            source.Stop();
+            source.clip = clip;
+            bpm = newBpm;
+            firstBeatOffsetSeconds = beatOffsetSeconds;
+            started = false;
+            running = false;
+            pauseTime = 0.0;
+            smoothingTime = 0.0;
+        }
+
+        /// <summary>停止播放并回到初始状态（选曲界面用）</summary>
+        public void Stop()
+        {
+            if (source != null) source.Stop();
+            started = false;
+            running = false;
+            pauseTime = 0.0;
+            smoothingTime = 0.0;
+        }
+
+        /// <summary>从指定歌曲时间开始播放（提前 0.1 秒预约给音频线程，保证起播干净）</summary>
         public void PlayFrom(double songSeconds = 0.0)
         {
             if (source == null || source.clip == null) return;
@@ -83,6 +114,7 @@ namespace RhythmPlayer.Core
             running = true;
         }
 
+        /// <summary>暂停（记录当前歌曲时间）</summary>
         public void Pause()
         {
             if (!running) return;
@@ -91,6 +123,7 @@ namespace RhythmPlayer.Core
             running = false;
         }
 
+        /// <summary>继续播放</summary>
         public void Resume()
         {
             if (running || !started) return;
@@ -100,6 +133,7 @@ namespace RhythmPlayer.Core
             running = true;
         }
 
+        /// <summary>空格键常用：暂停 / 继续（没开始时则从头播）</summary>
         public void TogglePlayPause()
         {
             if (!started) PlayFrom(0.0);
@@ -107,6 +141,7 @@ namespace RhythmPlayer.Core
             else Resume();
         }
 
+        /// <summary>跳转到指定歌曲时间（播放中即时生效）</summary>
         public void Seek(double songSeconds)
         {
             if (source == null || source.clip == null) return;
