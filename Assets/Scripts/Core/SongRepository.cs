@@ -402,6 +402,13 @@ namespace RhythmPlayer.Core
             }
         }
 
+        /// <summary>清掉某个压缩包的解压缓存（同名歌包重新导入后强制重新解压）</summary>
+        public static void InvalidateArchiveCache(string archivePath)
+        {
+            if (string.IsNullOrEmpty(archivePath)) return;
+            DeleteDirectory(Path.Combine(UnpackRoot, Path.GetFileNameWithoutExtension(archivePath)));
+        }
+
         /// <summary>尽力删除目录（失败忽略）</summary>
         static void DeleteDirectory(string path)
         {

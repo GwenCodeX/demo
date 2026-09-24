@@ -476,6 +476,47 @@ namespace RhythmPlayer.Play
             }
         }
 
+        /// <summary>安卓：打开系统文件管理器选歌包（zip / mcz），选完由 FilePickerActivity 拷进 Songs 目录</summary>
+        void OpenAndroidFilePicker()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var activity = new AndroidJavaClass("com.unity3d.player.UnityPlayer").GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var intent = new AndroidJavaObject("android.content.Intent", "android.intent.action.OPEN_DOCUMENT"))
+                {
+                    intent.Call<AndroidJavaObject>("addCategory", "android.intent.category.OPENABLE");
+                    intent.Call<AndroidJavaObject>("setType", "*/*");
+                    activity.Call("startActivityForResult", intent, 9911);
+                }
+                importMessage = "请在文件管理器里选择 zip / mcz 歌包";
+            }
+            catch (System.Exception e)
+            {
+                importMessage = "打开文件选择器失败：" + e.Message;
+            }
+#endif
+        }
+
+        /// <summary>安卓文件选择回调（FilePickerActivity 通过 UnitySendMessage 调用）</summary>
+        public void OnFilePicked(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                importMessage = "已取消选择";
+                return;
+            }
+            if (path.StartsWith("ERROR"))
+            {
+                importMessage = "导入失败：" + path;
+                return;
+            }
+
+            SongRepository.InvalidateArchiveCache(path);
+            RefreshSongs();
+            importMessage = $"已导入：{Path.GetFileName(path)}，当前识别 {songs.Count} 首歌曲";
+        }
+
         void OpenSongsFolder()
         {
             try
@@ -589,7 +630,10 @@ namespace RhythmPlayer.Play
             GUI.Box(panel, GUIContent.none, resultPanelStyle);
             GUI.Label(new Rect(panel.x, panel.y + 26f, panel.width, 44f), "导入歌曲", menuTitleStyle);
 
-            GUI.Label(new Rect(panel.x + 30f, panel.y + 100f, panel.width - 60f, 24f), "歌曲目录（把歌曲文件夹或 zip / mcz 歌包放进去）", hintStyle);
+            var importHint = IsTouchPlatform
+                ? "点「选择歌曲文件」直接导入 zip / mcz 歌包，也可以把歌包放进下面的目录"
+                : "把歌曲文件夹或 zip / mcz 歌包放进下面的目录，或点「打开歌曲文件夹」";
+            GUI.Label(new Rect(panel.x + 30f, panel.y + 100f, panel.width - 60f, 24f), importHint, hintStyle);
             GUI.Label(new Rect(panel.x + 30f, panel.y + 132f, panel.width - 60f, 24f), SongRepository.Root, pathStyle);
             GUI.Label(new Rect(panel.x, panel.y + 176f, panel.width, 30f), $"当前识别 {songs.Count} 首歌曲", settingsValueStyle);
 
@@ -601,16 +645,20 @@ namespace RhythmPlayer.Play
             const float buttonWidth = 260f;
             const float buttonHeight = 64f;
             var buttonY = panel.y + panel.height - 110f;
-            var buttonCount = IsTouchPlatform ? 2 : 3;
+            const int buttonCount = 3;
             const float gap = 20f;
             var startX = panel.x + (panel.width - (buttonCount * buttonWidth + (buttonCount - 1) * gap)) * 0.5f;
 
             var slot = 0;
-            if (!IsTouchPlatform)
+            if (IsTouchPlatform)
+            {
+                if (GUI.Button(new Rect(startX + slot * (buttonWidth + gap), buttonY, buttonWidth, buttonHeight), "选择歌曲文件", smallButtonStyle)) OpenAndroidFilePicker();
+            }
+            else
             {
                 if (GUI.Button(new Rect(startX + slot * (buttonWidth + gap), buttonY, buttonWidth, buttonHeight), "打开歌曲文件夹", smallButtonStyle)) OpenSongsFolder();
-                slot++;
             }
+            slot++;
             if (GUI.Button(new Rect(startX + slot * (buttonWidth + gap), buttonY, buttonWidth, buttonHeight), "重新扫描", smallButtonStyle))
             {
                 RefreshSongs();

@@ -20,6 +20,7 @@ namespace RhythmPlayer.EditorTools
     {
         const string SkinFolder = "Assets/Skins/ClassicDance3V"; // 皮肤素材目录
         const string SongsFolder = "Assets/Songs";               // 歌曲包目录
+        const string DemoSongFolder = "Sinsekai";                // 安卓包只内置的演示歌曲（第一首）
         const string DemoScenePath = "Assets/Scenes/PlayerDemo.unity";
         const int HitFxFrameCount = 8;                           // 打击特效帧数（hit-0 ~ hit-7）
 
@@ -155,42 +156,33 @@ namespace RhythmPlayer.EditorTools
             EditorApplication.Exit(result == BuildResult.Succeeded ? 0 : 1);
         }
 
-        /// <summary>把 Assets/Songs 的内容同步到 Assets/StreamingAssets（含清单），供安卓内置</summary>
+        /// <summary>把安卓演示歌包同步到 StreamingAssets（只带 Sinsekai 一首，含清单），供安卓首次运行释放</summary>
         static void SyncStreamingSongs()
         {
-            // 整个 StreamingAssets 都是构建时生成的，先清空重建
             if (Directory.Exists("Assets/StreamingAssets")) Directory.Delete("Assets/StreamingAssets", true);
             var targetRoot = "Assets/StreamingAssets/Songs";
             Directory.CreateDirectory(targetRoot);
 
             var manifest = new List<string>();
+            var sourceDir = Path.Combine(SongsFolder, DemoSongFolder);
+            if (!Directory.Exists(sourceDir))
+            {
+                Debug.LogWarning($"[BuildAndroid] 找不到演示歌曲目录 {sourceDir}");
+                return;
+            }
 
-            // 根目录下的文件（zip / mcz 等）
-            foreach (var file in Directory.GetFiles(SongsFolder))
+            foreach (var file in Directory.GetFiles(sourceDir))
             {
                 if (file.EndsWith(".meta")) continue;
                 var name = Path.GetFileName(file);
-                File.Copy(file, Path.Combine(targetRoot, name), true);
-                manifest.Add(name);
-            }
-
-            // 歌曲文件夹（含子目录）
-            foreach (var dir in Directory.GetDirectories(SongsFolder))
-            {
-                if (Path.GetFileName(dir).StartsWith("_")) continue; // 跳过缓存目录
-                foreach (var file in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
-                {
-                    if (file.EndsWith(".meta")) continue;
-                    var relative = Path.GetRelativePath(SongsFolder, file).Replace('\\', '/');
-                    var destination = Path.Combine(targetRoot, relative.Replace('/', Path.DirectorySeparatorChar));
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? targetRoot);
-                    File.Copy(file, destination, true);
-                    manifest.Add(relative);
-                }
+                var destination = Path.Combine(targetRoot, DemoSongFolder, name);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? targetRoot);
+                File.Copy(file, destination, true);
+                manifest.Add(DemoSongFolder + "/" + name);
             }
 
             File.WriteAllLines("Assets/StreamingAssets/" + SongRepository.ManifestName, manifest);
-            Debug.Log($"[BuildAndroid] 已同步 {manifest.Count} 个内置歌曲文件到 StreamingAssets");
+            Debug.Log($"[BuildAndroid] 已同步演示歌曲 {DemoSongFolder}（{manifest.Count} 个文件）到 StreamingAssets");
         }
 
         /// <summary>把 Assets/Songs 下的歌曲包复制到打包输出目录的 Songs 子目录（排除 .meta）</summary>
