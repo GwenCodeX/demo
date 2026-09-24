@@ -35,6 +35,9 @@ namespace RhythmPlayer.Core
 
         /// <summary>背景图路径（可为空）</summary>
         public string BackgroundPath;
+
+        /// <summary>音符总数（扫描时顺带解析得到；0 = 未知）</summary>
+        public int NoteCount;
     }
 
     /// <summary>
@@ -187,6 +190,7 @@ namespace RhythmPlayer.Core
                 Bpm = meta.Bpm,
                 AudioPath = audio,
                 ChartPath = mcPath,
+                NoteCount = meta.NoteCount,
             };
 
             if (!string.IsNullOrEmpty(meta.BackgroundFile))
@@ -247,6 +251,7 @@ namespace RhythmPlayer.Core
             }
 
             song.BackgroundPath = FindFirst(folder, new[] { "bg.jpg", "bg.png" });
+            song.NoteCount = ChartParser.LoadFile(chart).Notes.Count; // 顺带统计音符数（选曲列表展示用）
             return song;
         }
 

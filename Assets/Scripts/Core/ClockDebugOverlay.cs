@@ -1,9 +1,10 @@
 using UnityEngine;
+using RhythmPlayer.UI;
 
 namespace RhythmPlayer.Core
 {
     /// <summary>
-    /// 左上角调试面板：显示歌曲时间、拍数、时钟与音频位置的最大偏差（越小越同步）。
+    /// 左上角调试面板（简洁科技风）：显示歌曲时间、拍数、时钟与音频位置的最大偏差（越小越同步）。
     /// 快捷键：空格 = 暂停/继续；R = 从头重开；Esc = 返回选曲（GameRoot 处理）。
     /// </summary>
     [RequireComponent(typeof(SongClock))]
@@ -12,7 +13,8 @@ namespace RhythmPlayer.Core
         [SerializeField] SongClock clock;
 
         float maxDriftMs;   // 时钟与音频位置的最大偏差（毫秒）
-        GUIStyle style;
+        GUIStyle panelStyle;
+        GUIStyle textStyle;
 
         void Awake()
         {
@@ -37,12 +39,20 @@ namespace RhythmPlayer.Core
         void OnGUI()
         {
             if (clock == null) return;
-            style ??= new GUIStyle(GUI.skin.label) { fontSize = 20 };
 
+            panelStyle ??= UiTheme.PanelStyle();
+            textStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 15,
+                normal = { textColor = UiTheme.TextDim },
+            };
+
+            // 圆角半透明面板 + 三行信息
+            GUI.Box(new Rect(14f, 14f, 470f, 92f), GUIContent.none, panelStyle);
             var state = clock.IsRunning ? "播放中" : "已暂停";
-            GUI.Label(new Rect(16, 16, 900, 30), $"时钟 {state}    空格=暂停/继续  R=重开  Esc=选曲", style);
-            GUI.Label(new Rect(16, 52, 900, 30), $"歌曲时间 {clock.SongTime:F3} s    拍数 {clock.Beat:F3}    BPM {clock.Bpm:F0}", style);
-            GUI.Label(new Rect(16, 88, 900, 30), $"时钟与音频位置最大偏差 {maxDriftMs:F1} ms", style);
+            GUI.Label(new Rect(30f, 22f, 440f, 22f), $"时钟 {state}     空格 暂停/继续     R 重开     Esc 选曲", textStyle);
+            GUI.Label(new Rect(30f, 46f, 440f, 22f), $"歌曲时间 {clock.SongTime:F3} s     拍数 {clock.Beat:F2}     BPM {clock.Bpm:F0}", textStyle);
+            GUI.Label(new Rect(30f, 70f, 440f, 22f), $"时钟偏差 {maxDriftMs:F1} ms", textStyle);
         }
     }
 }

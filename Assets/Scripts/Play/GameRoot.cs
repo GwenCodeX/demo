@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using RhythmPlayer.Core;
+using RhythmPlayer.UI;
 using UnityEngine;
 using UnityEngine.Networking;
 
@@ -9,10 +10,11 @@ namespace RhythmPlayer.Play
 {
     /// <summary>
     /// 游戏入口：负责"选曲界面 ⇄ 游玩"的状态切换。
-    /// - 启动时扫描歌曲目录（Songs/），列出所有已导入的歌曲
+    /// - 启动时扫描歌曲目录（Songs/），列出所有已导入的歌曲（含 .zip / .mcz 自动解压导入）
     /// - 选曲：数字键 1-9 / 鼠标或触摸点击列表项
     /// - 选曲后从磁盘加载音频（UnityWebRequest，支持玩家自己放歌进来），再让 Playfield 解析谱面
     /// - 游玩中按 Esc（或整曲播完）自动回到选曲界面
+    /// 界面为简洁科技风：背景渐变 + 细网格 + 圆角面板（全部由 UiTheme 用代码绘制）。
     /// </summary>
     public sealed class GameRoot : MonoBehaviour
     {
@@ -32,8 +34,11 @@ namespace RhythmPlayer.Play
         State state = State.SongSelect;
         string loadingText = "";
         GUIStyle titleStyle;
+        GUIStyle subtitleStyle;
         GUIStyle rowStyle;
+        GUIStyle emptyRowStyle;
         GUIStyle hintStyle;
+        GUIStyle loadingStyle;
 
         void Start()
         {
@@ -95,7 +100,7 @@ namespace RhythmPlayer.Play
         IEnumerator LoadAndPlay(SongInfo song)
         {
             state = State.Loading;
-            loadingText = $"正在加载「{song.Name}」……";
+            loadingText = $"正在加载「{song.Name}」";
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
 
@@ -132,38 +137,34 @@ namespace RhythmPlayer.Play
             }
         }
 
+        // ===== 界面（简洁科技风） =====
+
         void OnGUI()
         {
             // 游玩中有自己的 HUD，这里只在选曲/加载时画界面
             if (state == State.Playing) return;
 
-            titleStyle ??= new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 44,
-                alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = new Color(1f, 1f, 1f, 0.95f) },
-            };
-            rowStyle ??= new GUIStyle(GUI.skin.button)
-            {
-                fontSize = 24,
-                alignment = TextAnchor.MiddleLeft,
-            };
-            hintStyle ??= new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 18,
-                alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = new Color(1f, 1f, 1f, 0.65f) },
-            };
+            UiTheme.DrawBackdrop(); // 渐变 + 网格背景
 
-            const float rowWidth = 860f;
-            const float rowHeight = 52f;
-            const float rowGap = 12f;
+            titleStyle ??= UiTheme.TitleStyle();
+            subtitleStyle ??= UiTheme.HintStyle();
+            rowStyle ??= UiTheme.RowStyle();
+            emptyRowStyle ??= UiTheme.EmptyRowStyle();
+            hintStyle ??= UiTheme.HintStyle();
+            loadingStyle ??= UiTheme.LoadingStyle();
+
+            // ---- 标题区 ----
+            GUI.Label(new Rect(0f, Screen.height * 0.075f, Screen.width, 62f), "RHYTHM PLAYER", titleStyle);
+            GUI.Label(new Rect(0f, Screen.height * 0.075f + 58f, Screen.width, 28f), "六边形音游播放器", subtitleStyle);
+            GUI.DrawTexture(new Rect(Screen.width * 0.5f - 180f, Screen.height * 0.075f + 100f, 360f, 2f), UiTheme.AccentLine());
+
+            // ---- 歌曲列表：固定展示至少 4 个槽位（1-4），没有歌曲的槽位给出导入提示 ----
+            const float rowWidth = 880f;
+            const float rowHeight = 56f;
+            const float rowGap = 14f;
             var left = (Screen.width - rowWidth) * 0.5f;
-            var top = Screen.height * 0.22f;
+            var top = Screen.height * 0.26f;
 
-            GUI.Label(new Rect(0f, Screen.height * 0.08f, Screen.width, 60f), "音游播放器 · 选曲", titleStyle);
-
-            // 固定展示至少 4 个槽位（1-4），没有歌曲的槽位给出导入提示
             var rows = Mathf.Clamp(Mathf.Max(4, songs.Count), 4, 9);
             for (var i = 0; i < rows; i++)
             {
@@ -172,24 +173,26 @@ namespace RhythmPlayer.Play
                 {
                     var song = songs[i];
                     var artist = string.IsNullOrEmpty(song.Artist) ? "未知曲师" : song.Artist;
-                    var text = $"{i + 1}.  {song.Name}      — {artist}      BPM {song.Bpm:0}";
-                    if (GUI.Button(rect, "  " + text, rowStyle))
-                    {
-                        StartSong(i); // 鼠标点击 / 触摸点击
-                    }
+                    var notes = song.NoteCount > 0 ? $"      {song.NoteCount} 音符" : "";
+                    var text = $"{i + 1:00}    {song.Name}      —  {artist}      BPM {song.Bpm:0}{notes}";
+                    if (GUI.Button(rect, text, rowStyle)) StartSong(i); // 鼠标点击 / 触摸点击
                 }
                 else
                 {
-                    GUI.Label(rect, $"{i + 1}.  （未导入 · 把歌曲文件夹放进 Songs 目录即可）", hintStyle);
+                    GUI.Label(rect, $"{i + 1:00}    （未导入 · 把歌曲文件夹或 zip / mcz 放进 Songs 目录）", emptyRowStyle);
                 }
             }
 
-            GUI.Label(new Rect(0f, Screen.height - 96f, Screen.width, 26f),
-                "数字键 1-4（最多 9）选歌   ·   鼠标/触摸点击列表   ·   游玩中 Esc 返回选曲   ·   Tab 切换自动/手动",
+            // ---- 底部操作提示 ----
+            GUI.Label(new Rect(0f, Screen.height - 84f, Screen.width, 24f),
+                "数字键 1-4（最多 9）选歌   ·   鼠标 / 触摸点击列表   ·   游玩中 Esc 返回选曲   ·   Tab 切换自动 / 手动",
                 hintStyle);
+
+            // ---- 加载中提示（带点动画）----
             if (!string.IsNullOrEmpty(loadingText))
             {
-                GUI.Label(new Rect(0f, Screen.height - 58f, Screen.width, 30f), loadingText, hintStyle);
+                var dots = new string('.', 1 + (int)(Time.unscaledTime * 3f) % 3);
+                GUI.Box(new Rect((Screen.width - 520f) * 0.5f, Screen.height - 200f, 520f, 64f), loadingText + dots, loadingStyle);
             }
         }
     }

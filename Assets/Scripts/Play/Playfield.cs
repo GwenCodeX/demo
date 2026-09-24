@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using RhythmPlayer.Core;
+using RhythmPlayer.UI;
 
 namespace RhythmPlayer.Play
 {
@@ -128,7 +129,9 @@ namespace RhythmPlayer.Play
         SpriteRenderer backgroundRenderer; // 当前背景（换曲时替换精灵）
         string[] padLabelTexts;     // 判定点标签文字（预生成，避免每帧分配）
         GUIStyle labelStyle;
-        GUIStyle statsStyle;
+        GUIStyle hudPanelStyle;
+        GUIStyle hudModeStyle;
+        GUIStyle hudStatsStyle;
 
         // 判定统计
         int bestCount;
@@ -402,19 +405,22 @@ namespace RhythmPlayer.Play
 
             if (note.IsHold)
             {
-                // 长条：双押长条用橙色版本，普通长条用蓝色版本
-                SetSprite(view.Head, note.IsDouble ? (holdBothSprite != null ? holdBothSprite : holdHeadSprite) : holdHeadSprite, new Color(0.78f, 0.92f, 1f));
+                // 长条：头部与尾部同色同形——单押蓝色（SIMPLEHold），双押橙色（SIMPLEholdboth）
+                var holdSprite = note.IsDouble
+                    ? (holdBothSprite != null ? holdBothSprite : holdHeadSprite)
+                    : (holdHeadSprite != null ? holdHeadSprite : holdTailSprite);
+                SetSprite(view.Head, holdSprite, new Color(0.78f, 0.92f, 1f));
+                SetSprite(view.Tail, holdSprite, new Color(0.78f, 0.92f, 1f));
+                SetSprite(view.Body, holdBodySprite, new Color(0.45f, 0.68f, 1f, 0.5f));
             }
             else
             {
                 SetSprite(view.Head, note.IsDouble ? tapBothSprite : tapSprite, new Color(0.78f, 0.92f, 1f));
             }
+
             view.Body.gameObject.SetActive(false);
             view.Tail.gameObject.SetActive(false);
             view.BothLine.gameObject.SetActive(false);
-
-            if (note.IsHold) SetSprite(view.Body, holdBodySprite, new Color(0.45f, 0.68f, 1f, 0.5f));
-            if (note.IsHold) SetSprite(view.Tail, holdTailSprite, new Color(0.78f, 0.92f, 1f));
 
             active.Add(view);
         }
@@ -821,17 +827,20 @@ namespace RhythmPlayer.Play
             var cam = Camera.main;
             if (cam == null) return;
 
-            labelStyle ??= new GUIStyle(GUI.skin.label)
+            // 样式（懒创建；UiTheme 提供科技风底图）
+            labelStyle ??= UiTheme.PadLabelStyle();
+            hudPanelStyle ??= UiTheme.PanelStyle();
+            hudModeStyle ??= new GUIStyle(GUI.skin.label)
             {
-                fontSize = 18,
-                alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = new Color(1f, 1f, 1f, 0.85f) },
-            };
-            statsStyle ??= new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 20,
+                fontSize = 16,
                 alignment = TextAnchor.UpperRight,
-                normal = { textColor = new Color(1f, 1f, 1f, 0.9f) },
+                normal = { textColor = new Color(0.55f, 0.9f, 1f, 0.9f) },
+            };
+            hudStatsStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 19,
+                alignment = TextAnchor.UpperRight,
+                normal = { textColor = UiTheme.TextMain },
             };
 
             // 判定点标签（编号 + 按键）
@@ -845,11 +854,13 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            // 右上角统计
+            // 右上角统计面板（圆角半透明面板 + 两行信息）
             var mode = autoPlay ? "自动演示" : "手动游玩";
-            GUI.Label(new Rect(Screen.width - 640f, 16f, 620f, 30f),
-                $"{mode}（Tab 切换）    Best {bestCount}  Cool {coolCount}  Good {goodCount}  Miss {missCount}    Combo {combo}",
-                statsStyle);
+            var panelRect = new Rect(Screen.width - 596f, 14f, 578f, 84f);
+            GUI.Box(panelRect, GUIContent.none, hudPanelStyle);
+            GUI.Label(new Rect(panelRect.x + 16f, panelRect.y + 10f, panelRect.width - 32f, 24f), mode + "（Tab 切换）", hudModeStyle);
+            GUI.Label(new Rect(panelRect.x + 16f, panelRect.y + 40f, panelRect.width - 32f, 30f),
+                $"Best {bestCount}   Cool {coolCount}   Good {goodCount}   Miss {missCount}      Combo {combo}", hudStatsStyle);
         }
 
         /// <summary>按键显示名（逗号/句号显示为符号）</summary>

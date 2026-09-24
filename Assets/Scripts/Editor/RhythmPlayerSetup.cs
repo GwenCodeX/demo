@@ -34,7 +34,6 @@ namespace RhythmPlayer.EditorTools
                 SkinFolder + "/SIMPLETapboth.png",
                 SkinFolder + "/SIMPLEHold.png",
                 SkinFolder + "/SIMPLEholdboth.png",
-                SkinFolder + "/SIMPLEholdendSHOW.png",
                 SkinFolder + "/holdbody.png",
                 SkinFolder + "/lineout.png",
                 SkinFolder + "/both line.png",
@@ -152,7 +151,7 @@ namespace RhythmPlayer.EditorTools
             serialized.FindProperty("holdHeadSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEHold.png");
             serialized.FindProperty("holdBothSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEholdboth.png");
             serialized.FindProperty("holdBodySprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdbody.png");
-            serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEholdendSHOW.png");
+            serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEHold.png");
             serialized.FindProperty("hexFrameSprite").objectReferenceValue = LoadSprite(SkinFolder + "/lineout.png");
             serialized.FindProperty("bothLineSprite").objectReferenceValue = LoadSprite(SkinFolder + "/both line.png");
             serialized.FindProperty("bestSprite").objectReferenceValue = LoadSprite(SkinFolder + "/best.png");
