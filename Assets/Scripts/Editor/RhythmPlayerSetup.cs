@@ -16,24 +16,36 @@ namespace RhythmPlayer.EditorTools
         const float SongBpm = 193f;
         const string SkinFolder = "Assets/Skins/ClassicDance3V";
         const string DemoScenePath = "Assets/Scenes/PlayerDemo.unity";
+        const int HitFxFrameCount = 8;
 
-        static readonly string[] SpriteFiles =
+        static readonly string[] SpriteFiles = BuildSpriteFileList();
+
+        static string[] BuildSpriteFileList()
         {
-            SkinFolder + "/tap.png",
-            SkinFolder + "/tapboth.png",
-            SkinFolder + "/hold-0.png",
-            SkinFolder + "/holdbody.png",
-            SkinFolder + "/holdend.png",
-            SkinFolder + "/lineout.png",
-            SkinFolder + "/both line.png",
-        };
+            var list = new List<string>
+            {
+                SkinFolder + "/tap.png",
+                SkinFolder + "/tapboth.png",
+                SkinFolder + "/hold-0.png",
+                SkinFolder + "/holdbody.png",
+                SkinFolder + "/holdend.png",
+                SkinFolder + "/lineout.png",
+                SkinFolder + "/both line.png",
+                SkinFolder + "/best.png",
+                SkinFolder + "/cool.png",
+                SkinFolder + "/good.png",
+                SkinFolder + "/miss.png",
+            };
+            for (var i = 0; i < HitFxFrameCount; i++) list.Add($"{SkinFolder}/hit-{i}.png");
+            return list.ToArray();
+        }
 
         [MenuItem("Tools/音游播放器/搭建播放器场景")]
         static void BuildPlayerSceneMenu()
         {
             BuildSceneInto();
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
-            Debug.Log("场景就绪（sinsekai / BPM 193）。按 Play 开始；空格暂停/继续，R 重开。记得 Ctrl+S 保存场景。");
+            Debug.Log("场景就绪（sinsekai / BPM 193）。按 Play 开始；空格暂停/继续，R 重开，Tab 切换自动/手动。");
         }
 
         /// 批处理打包入口：
@@ -97,14 +109,26 @@ namespace RhythmPlayer.EditorTools
             var serialized = new SerializedObject(playfield);
             serialized.FindProperty("clock").objectReferenceValue = clock;
             serialized.FindProperty("chartAsset").objectReferenceValue = chart;
-            serialized.FindProperty("tapSprite").objectReferenceValue = LoadSprite(SpriteFiles[0]);
-            serialized.FindProperty("tapBothSprite").objectReferenceValue = LoadSprite(SpriteFiles[1]);
-            serialized.FindProperty("holdHeadSprite").objectReferenceValue = LoadSprite(SpriteFiles[2]);
-            serialized.FindProperty("holdBodySprite").objectReferenceValue = LoadSprite(SpriteFiles[3]);
-            serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SpriteFiles[4]);
+            serialized.FindProperty("tapSprite").objectReferenceValue = LoadSprite(SkinFolder + "/tap.png");
+            serialized.FindProperty("tapBothSprite").objectReferenceValue = LoadSprite(SkinFolder + "/tapboth.png");
+            serialized.FindProperty("holdHeadSprite").objectReferenceValue = LoadSprite(SkinFolder + "/hold-0.png");
+            serialized.FindProperty("holdBodySprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdbody.png");
+            serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdend.png");
             serialized.FindProperty("backgroundSprite").objectReferenceValue = LoadSprite(SongFolder + "/bg.jpg");
-            serialized.FindProperty("hexFrameSprite").objectReferenceValue = LoadSprite(SpriteFiles[5]);
-            serialized.FindProperty("bothLineSprite").objectReferenceValue = LoadSprite(SpriteFiles[6]);
+            serialized.FindProperty("hexFrameSprite").objectReferenceValue = LoadSprite(SkinFolder + "/lineout.png");
+            serialized.FindProperty("bothLineSprite").objectReferenceValue = LoadSprite(SkinFolder + "/both line.png");
+            serialized.FindProperty("bestSprite").objectReferenceValue = LoadSprite(SkinFolder + "/best.png");
+            serialized.FindProperty("coolSprite").objectReferenceValue = LoadSprite(SkinFolder + "/cool.png");
+            serialized.FindProperty("goodSprite").objectReferenceValue = LoadSprite(SkinFolder + "/good.png");
+            serialized.FindProperty("missSprite").objectReferenceValue = LoadSprite(SkinFolder + "/miss.png");
+
+            var fxProperty = serialized.FindProperty("hitFxFrames");
+            fxProperty.arraySize = HitFxFrameCount;
+            for (var i = 0; i < HitFxFrameCount; i++)
+            {
+                fxProperty.GetArrayElementAtIndex(i).objectReferenceValue = LoadSprite($"{SkinFolder}/hit-{i}.png");
+            }
+
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             SetupCamera();
