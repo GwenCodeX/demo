@@ -4,11 +4,14 @@ using RhythmPlayer.Core;
 
 namespace RhythmPlayer.Play
 {
-    /// 6 轨下落播放器：音符位置完全由拍数决定（位置 = f(剩余拍数)），
-    /// 所以暂停、跳转、变速都不需要额外状态，天然和音乐同步。
-    /// 皮肤精灵留空时自动退回纯色矩形。
+    /// 六边形演奏面板：左列上中下 = 键 1/2/3，右列上中下 = 键 4/5/6。
+    /// 音符从六边形外沿"判定点法线方向"飞向判定点（位置 = f(剩余拍数)），
+    /// 天然与音乐同步；皮肤精灵留空时退回纯色矩形。
     public sealed class Playfield : MonoBehaviour
     {
+        // 键位 1-6 → 六边形角度（度）：120°=左上, 180°=左中, 240°=左下, 60°=右上, 0°=右中, 300°=右下
+        static readonly float[] PadAngleDeg = { 120f, 180f, 240f, 60f, 0f, 300f };
+
         [Header("引用")]
         [SerializeField] SongClock clock;
         [SerializeField] TextAsset chartAsset;
@@ -20,16 +23,22 @@ namespace RhythmPlayer.Play
         [SerializeField] Sprite holdBodySprite;
         [SerializeField] Sprite holdTailSprite;
         [SerializeField] Sprite backgroundSprite;
+        [SerializeField] Sprite hexFrameSprite;
+        [SerializeField] Sprite bothLineSprite;
 
-        [Header("布局（世界单位）")]
-        [SerializeField] int laneCount = 6;
-        [SerializeField] float laneWidth = 1f;
-        [SerializeField] float judgeLineY = -4f;
-        [SerializeField] float viewHeight = 10f;
+        [Header("六边形布局（世界单位）")]
+        [Tooltip("六边形中心到顶点的距离")]
+        [SerializeField] float hexRadius = 4.3f;
+        [Tooltip("音符从判定点外多远开始出现")]
+        [SerializeField] float spawnDistance = 7f;
 
         [Header("手感")]
-        [Tooltip("每拍下落距离，越大音符越快")]
+        [Tooltip("每拍飞行距离，越大越快")]
         [SerializeField] float unitsPerBeat = 2.2f;
+
+        [Header("按键映射（左列上中下 1/2/3，右列上中下 4/5/6）")]
+        [SerializeField] KeyCode[] judgeKeys = { KeyCode.E, KeyCode.D, KeyCode.C, KeyCode.I, KeyCode.K, KeyCode.Comma };
+        [SerializeField] bool showPadLabels = true;
 
         [Header("启动")]
         [SerializeField] bool autoStart = true;
@@ -40,15 +49,19 @@ namespace RhythmPlayer.Play
             public SpriteRenderer Head;
             public SpriteRenderer Body;
             public SpriteRenderer Tail;
+            public SpriteRenderer BothLine;
             public ChartNote Note;
         }
 
         readonly List<NoteView> active = new List<NoteView>();
         readonly Stack<NoteView> pool = new Stack<NoteView>();
+        readonly SpriteRenderer[] padFlashes = new SpriteRenderer[6];
+        readonly float[] padFlashTimer = new float[6];
         ChartData chart;
         int nextIndex;
         double lastBeat;
         bool ready;
+        GUIStyle labelStyle;
 
         void Start()
         {
@@ -71,13 +84,14 @@ namespace RhythmPlayer.Play
 
         void Update()
         {
+            UpdateInputFlash();
             if (!ready || clock == null) return;
+
             var beat = clock.Beat;
             if (System.Math.Abs(beat - lastBeat) > 1.0) ResetTo(beat);
             lastBeat = beat;
 
-            var spawnBeats = viewHeight / unitsPerBeat;
-            while (nextIndex < chart.Notes.Count && chart.Notes[nextIndex].StartBeat - beat <= spawnBeats)
+            while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= spawnDistance)
             {
                 Activate(nextIndex);
                 nextIndex++;
@@ -86,19 +100,28 @@ namespace RhythmPlayer.Play
             for (var i = active.Count - 1; i >= 0; i--)
             {
                 var view = active[i];
-                var headY = judgeLineY + (float)(view.Note.StartBeat - beat) * unitsPerBeat;
-                var tailY = judgeLineY + (float)(view.Note.EndBeat - beat) * unitsPerBeat;
-                var noteWidth = laneWidth * 0.9f;
+                var note = view.Note;
+                var lane = Mathf.Clamp(note.Lane, 0, 5);
+                var radial = PadDirection(lane);
+                var pad = radial * (hexRadius * 0.866f);
+                var approach = (float)(note.StartBeat - beat) * unitsPerBeat;
+                var tailOffset = (float)(note.EndBeat - beat) * unitsPerBeat;
+                var rotation = Quaternion.Euler(0f, 0f, PadAngleDeg[lane]);
+                var noteWidth = 0.9f;
 
-                PlaceBar(view.Head, headY, noteWidth, 0.22f);
+                PlaceNote(view.Head, pad + radial * approach, rotation, noteWidth, 0.3f);
 
-                if (view.Note.IsHold)
+                if (note.IsHold)
                 {
-                    PlaceBody(view.Body, (headY + tailY) * 0.5f, noteWidth * 0.55f, Mathf.Max(0.05f, tailY - headY));
-                    PlaceBar(view.Tail, tailY, noteWidth, 0.22f);
+                    var bodyCenter = pad + radial * ((approach + tailOffset) * 0.5f);
+                    var bodyLength = Mathf.Max(0.05f, (float)(note.EndBeat - note.StartBeat) * unitsPerBeat);
+                    PlaceBody(view.Body, bodyCenter, rotation * Quaternion.Euler(0f, 0f, 90f), noteWidth * 0.55f, bodyLength);
+                    PlaceNote(view.Tail, pad + radial * tailOffset, rotation, noteWidth, 0.3f);
                 }
 
-                if (tailY < judgeLineY - 3f) Release(i);
+                UpdateBothLine(view, approach, tailOffset);
+
+                if (tailOffset < -0.35f) Release(i);
             }
         }
 
@@ -135,8 +158,7 @@ namespace RhythmPlayer.Play
                 view.Tail.gameObject.SetActive(false);
             }
 
-            var lane = Mathf.Clamp(note.Lane, 0, laneCount - 1);
-            view.Root.transform.localPosition = new Vector3(LaneCenterX(lane), 0f, 0f);
+            view.BothLine.gameObject.SetActive(false);
             active.Add(view);
         }
 
@@ -158,6 +180,7 @@ namespace RhythmPlayer.Play
                 Head = CreateQuad(root.transform, "Head", 11, new Color(0.78f, 0.92f, 1f)),
                 Body = CreateQuad(root.transform, "Body", 10, new Color(0.45f, 0.68f, 1f, 0.5f)),
                 Tail = CreateQuad(root.transform, "Tail", 11, new Color(0.78f, 0.92f, 1f)),
+                BothLine = CreateQuad(root.transform, "BothLine", 9, new Color(1f, 1f, 1f, 0.75f)),
             };
         }
 
@@ -167,9 +190,10 @@ namespace RhythmPlayer.Play
             renderer.color = sprite != null ? Color.white : fallbackColor;
         }
 
-        void PlaceBar(SpriteRenderer renderer, float centerY, float width, float fallbackHeight)
+        void PlaceNote(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float fallbackHeight)
         {
-            renderer.transform.localPosition = new Vector3(0f, centerY, 0f);
+            renderer.transform.localPosition = position;
+            renderer.transform.localRotation = rotation;
             if (renderer.sprite == SpriteFactory.Square())
             {
                 renderer.transform.localScale = new Vector3(width, fallbackHeight, 1f);
@@ -179,9 +203,10 @@ namespace RhythmPlayer.Play
             renderer.transform.localScale = new Vector3(scale, scale, 1f);
         }
 
-        void PlaceBody(SpriteRenderer renderer, float centerY, float width, float length)
+        void PlaceBody(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float length)
         {
-            renderer.transform.localPosition = new Vector3(0f, centerY, 0f);
+            renderer.transform.localPosition = position;
+            renderer.transform.localRotation = rotation;
             if (renderer.sprite == SpriteFactory.Square())
             {
                 renderer.transform.localScale = new Vector3(width, length, 1f);
@@ -189,6 +214,49 @@ namespace RhythmPlayer.Play
             }
             var size = renderer.sprite.bounds.size;
             renderer.transform.localScale = new Vector3(width / Mathf.Max(0.0001f, size.x), length / Mathf.Max(0.0001f, size.y), 1f);
+        }
+
+        void UpdateBothLine(NoteView view, float approach, float tailOffset)
+        {
+            var note = view.Note;
+            var show = bothLineSprite != null && note.PartnerLane >= 0 && note.Lane < note.PartnerLane
+                       && approach <= 3.5f && tailOffset >= -0.35f;
+            if (!show)
+            {
+                if (view.BothLine.gameObject.activeSelf) view.BothLine.gameObject.SetActive(false);
+                return;
+            }
+
+            var a = PadPosition(note.Lane);
+            var b = PadPosition(note.PartnerLane);
+            var delta = b - a;
+            var size = bothLineSprite.bounds.size;
+            view.BothLine.gameObject.SetActive(true);
+            view.BothLine.sprite = bothLineSprite;
+            view.BothLine.color = new Color(1f, 1f, 1f, 0.75f);
+            view.BothLine.transform.localPosition = (a + b) * 0.5f;
+            view.BothLine.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg);
+            view.BothLine.transform.localScale = new Vector3(delta.magnitude / Mathf.Max(0.0001f, size.x), 0.75f / Mathf.Max(0.0001f, size.y), 1f);
+        }
+
+        void UpdateInputFlash()
+        {
+            for (var i = 0; i < padFlashes.Length; i++)
+            {
+                if (judgeKeys != null && i < judgeKeys.Length && Input.GetKeyDown(judgeKeys[i])) padFlashTimer[i] = 0.18f;
+
+                if (padFlashTimer[i] > 0f)
+                {
+                    padFlashTimer[i] -= Time.deltaTime;
+                    var alpha = Mathf.Clamp01(padFlashTimer[i] / 0.18f) * 0.85f;
+                    padFlashes[i].gameObject.SetActive(true);
+                    padFlashes[i].color = new Color(0.55f, 0.95f, 1f, alpha);
+                }
+                else if (padFlashes[i].gameObject.activeSelf)
+                {
+                    padFlashes[i].gameObject.SetActive(false);
+                }
+            }
         }
 
         SpriteRenderer CreateQuad(Transform parent, string name, int sortingOrder, Color color)
@@ -202,33 +270,79 @@ namespace RhythmPlayer.Play
             return renderer;
         }
 
-        float LaneCenterX(int lane) => (lane - (laneCount - 1) * 0.5f) * laneWidth;
+        static Vector3 PadDirection(int lane)
+        {
+            var radians = PadAngleDeg[Mathf.Clamp(lane, 0, 5)] * Mathf.Deg2Rad;
+            return new Vector3(Mathf.Cos(radians), Mathf.Sin(radians), 0f);
+        }
+
+        Vector3 PadPosition(int lane) => PadDirection(lane) * (hexRadius * 0.866f);
 
         void BuildVisuals()
         {
-            var fieldWidth = laneCount * laneWidth;
+            var cam = Camera.main;
+            var viewHeight = cam != null && cam.orthographic ? cam.orthographicSize * 2f : 11.6f;
+            var viewWidth = viewHeight * Screen.width / Mathf.Max(1, Screen.height);
 
             if (backgroundSprite != null)
             {
-                var background = CreateQuad(transform, "Background", -10, new Color(0.62f, 0.62f, 0.72f));
+                var background = CreateQuad(transform, "Background", -10, new Color(0.65f, 0.65f, 0.75f));
                 background.sprite = backgroundSprite;
                 var size = backgroundSprite.bounds.size;
-                var scale = Mathf.Max(fieldWidth * 1.6f / size.x, viewHeight * 1.35f / size.y);
-                background.transform.localPosition = new Vector3(0f, judgeLineY + viewHeight * 0.5f, 1f);
+                var scale = Mathf.Max(viewWidth / Mathf.Max(0.0001f, size.x), viewHeight / Mathf.Max(0.0001f, size.y)) * 1.02f;
+                background.transform.localPosition = new Vector3(0f, 0f, 2f);
                 background.transform.localScale = new Vector3(scale, scale, 1f);
             }
 
-            for (var i = 0; i <= laneCount; i++)
+            if (hexFrameSprite != null)
             {
-                var line = CreateQuad(transform, "LaneLine", 0, new Color(1f, 1f, 1f, 0.08f));
-                var x = (i - laneCount * 0.5f) * laneWidth;
-                line.transform.localPosition = new Vector3(x, judgeLineY + viewHeight * 0.5f, 0f);
-                line.transform.localScale = new Vector3(0.03f, viewHeight, 1f);
+                var frame = CreateQuad(transform, "HexFrame", -5, Color.white);
+                frame.sprite = hexFrameSprite;
+                var size = hexFrameSprite.bounds.size;
+                var scale = hexRadius * 2f / Mathf.Max(0.0001f, Mathf.Max(size.x, size.y));
+                frame.transform.localPosition = new Vector3(0f, 0f, 1f);
+                frame.transform.localScale = new Vector3(scale, scale, 1f);
             }
 
-            var judge = CreateQuad(transform, "JudgeLine", 5, new Color(1f, 1f, 1f, 0.85f));
-            judge.transform.localPosition = new Vector3(0f, judgeLineY, 0f);
-            judge.transform.localScale = new Vector3(fieldWidth, 0.06f, 1f);
+            for (var i = 0; i < padFlashes.Length; i++)
+            {
+                var flash = CreateQuad(transform, "PadFlash" + (i + 1), 3, new Color(0.55f, 0.95f, 1f, 0f));
+                flash.transform.localPosition = PadPosition(i);
+                flash.transform.localScale = new Vector3(0.9f, 0.9f, 1f);
+                flash.gameObject.SetActive(false);
+                padFlashes[i] = flash;
+            }
+        }
+
+        void OnGUI()
+        {
+            if (!showPadLabels) return;
+            var cam = Camera.main;
+            if (cam == null) return;
+
+            labelStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 18,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = new Color(1f, 1f, 1f, 0.85f) },
+            };
+
+            for (var i = 0; i < 6; i++)
+            {
+                var screen = cam.WorldToScreenPoint(PadPosition(i) * 0.82f);
+                if (screen.z <= 0f) continue;
+                var text = $"{i + 1} ({KeyLabel(i)})";
+                GUI.Label(new Rect(screen.x - 45f, Screen.height - screen.y - 12f, 90f, 24f), text, labelStyle);
+            }
+        }
+
+        string KeyLabel(int index)
+        {
+            if (judgeKeys == null || index >= judgeKeys.Length) return "-";
+            var key = judgeKeys[index];
+            if (key == KeyCode.Comma) return ",";
+            if (key == KeyCode.Period) return ".";
+            return key.ToString();
         }
     }
 }

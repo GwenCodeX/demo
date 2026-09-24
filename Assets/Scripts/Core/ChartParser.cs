@@ -6,7 +6,7 @@ namespace RhythmPlayer.Core
 {
     /// 谱面音符。支持两种文本格式：
     /// 新格式（DCS 制谱器导出，如 C017.txt）：`{键位}-{开始拍}[-{结束拍}]`
-    ///   键位 1-6 = 六个键（对应角度扇区 1-6）；两位数如 24 = 双押（键 2+键 4 同时）。
+    ///   键位 1-6 = 六个键；两位数如 24 = 双押（键 2+键 4 同时）。
     /// 旧格式（如 E119.txt）：`{首位}{L/R}{角度}-{开始拍}[-{结束拍}]`
     ///   首位 0 = 单点 / 1-6 = 长条，轨道暂按 角度/60 映射（语义未确认，可调）。
     public readonly struct ChartNote
@@ -18,8 +18,9 @@ namespace RhythmPlayer.Core
         public readonly double EndBeat; // 单点时与 StartBeat 相同
         public readonly int Lane;       // 0-5，六条轨道
         public readonly bool IsDouble;  // 双押
+        public readonly int PartnerLane; // 双押伙伴轨道；非双押为 -1
 
-        public ChartNote(int style, char side, int angleDeg, double startBeat, double endBeat, int lane, bool isDouble)
+        public ChartNote(int style, char side, int angleDeg, double startBeat, double endBeat, int lane, bool isDouble, int partnerLane)
         {
             Style = style;
             Side = side;
@@ -28,6 +29,7 @@ namespace RhythmPlayer.Core
             EndBeat = endBeat;
             Lane = lane;
             IsDouble = isDouble;
+            PartnerLane = partnerLane;
         }
 
         public bool IsHold => EndBeat > StartBeat;
@@ -88,12 +90,19 @@ namespace RhythmPlayer.Core
             var end = start;
             if (parts.Length >= 3 && !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out end)) return false;
 
-            var isDouble = keys.Length == 2;
-            foreach (var c in keys)
+            var lanes = new int[keys.Length];
+            for (var i = 0; i < keys.Length; i++)
             {
-                var key = c - '0';
+                var key = keys[i] - '0';
                 if (key < 1 || key > 6) return false;
-                data.Notes.Add(new ChartNote(0, '-', 0, start, end, key - 1, isDouble));
+                lanes[i] = key - 1;
+            }
+
+            var isDouble = lanes.Length == 2;
+            for (var i = 0; i < lanes.Length; i++)
+            {
+                var partner = isDouble ? lanes[1 - i] : -1;
+                data.Notes.Add(new ChartNote(0, '-', 0, start, end, lanes[i], isDouble, partner));
             }
             return true;
         }
@@ -109,7 +118,7 @@ namespace RhythmPlayer.Core
             var end = start;
             if (parts.Length >= 3 && !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out end)) return false;
 
-            data.Notes.Add(new ChartNote(style, head[1], angle, start, end, angle / 60 % 6, false));
+            data.Notes.Add(new ChartNote(style, head[1], angle, start, end, angle / 60 % 6, false, -1));
             return true;
         }
 

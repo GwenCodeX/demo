@@ -24,6 +24,8 @@ namespace RhythmPlayer.EditorTools
             SkinFolder + "/hold-0.png",
             SkinFolder + "/holdbody.png",
             SkinFolder + "/holdend.png",
+            SkinFolder + "/lineout.png",
+            SkinFolder + "/both line.png",
         };
 
         [MenuItem("Tools/音游播放器/搭建播放器场景")]
@@ -101,6 +103,8 @@ namespace RhythmPlayer.EditorTools
             serialized.FindProperty("holdBodySprite").objectReferenceValue = LoadSprite(SpriteFiles[3]);
             serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SpriteFiles[4]);
             serialized.FindProperty("backgroundSprite").objectReferenceValue = LoadSprite(SongFolder + "/bg.jpg");
+            serialized.FindProperty("hexFrameSprite").objectReferenceValue = LoadSprite(SpriteFiles[5]);
+            serialized.FindProperty("bothLineSprite").objectReferenceValue = LoadSprite(SpriteFiles[6]);
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             SetupCamera();
@@ -151,7 +155,7 @@ namespace RhythmPlayer.EditorTools
             if (camera == null) return;
             camera.orthographic = true;
             camera.orthographicSize = 5.8f;
-            camera.transform.position = new Vector3(0f, 1f, -10f);
+            camera.transform.position = new Vector3(0f, 0f, -10f);
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color(0.07f, 0.08f, 0.11f);
         }
