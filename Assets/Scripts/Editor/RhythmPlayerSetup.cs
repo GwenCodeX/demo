@@ -43,6 +43,8 @@ namespace RhythmPlayer.EditorTools
                 SkinFolder + "/miss.png",
             };
             for (var i = 0; i < HitFxFrameCount; i++) list.Add($"{SkinFolder}/hit-{i}.png");
+            list.Add(SkinFolder + "/ComboTAG.png");
+            for (var i = 0; i < 10; i++) list.Add($"{SkinFolder}/num-{i}.png");
             return list.ToArray();
         }
 
@@ -159,6 +161,15 @@ namespace RhythmPlayer.EditorTools
             serialized.FindProperty("goodSprite").objectReferenceValue = LoadSprite(SkinFolder + "/good.png");
             serialized.FindProperty("missSprite").objectReferenceValue = LoadSprite(SkinFolder + "/miss.png");
             serialized.FindProperty("hitSound").objectReferenceValue = AssetDatabase.LoadAssetAtPath<AudioClip>(SkinFolder + "/cube-arcade.wav");
+
+            // 连击数字（num-0 ~ num-9）与连击标记（ComboTAG）
+            var comboDigits = serialized.FindProperty("comboDigitSprites");
+            comboDigits.arraySize = 10;
+            for (var i = 0; i < 10; i++)
+            {
+                comboDigits.GetArrayElementAtIndex(i).objectReferenceValue = LoadSprite($"{SkinFolder}/num-{i}.png");
+            }
+            serialized.FindProperty("comboTagSprite").objectReferenceValue = LoadSprite(SkinFolder + "/ComboTAG.png");
 
             var fxProperty = serialized.FindProperty("hitFxFrames");
             fxProperty.arraySize = HitFxFrameCount;

@@ -31,6 +31,15 @@ namespace RhythmPlayer.Play
         const float FrameDuration = 0.045f;     // 打击特效每帧时长（秒）
         const float PopupLife = 0.45f;          // 判定字存活时长（秒）
         const float EffectWidth = 1.7f;         // 特效/判定字的基准宽度（世界单位）
+        const int ComboShowFrom = 4;            // 连击 ≥ 该值才显示数字
+        const float ComboDigitHeight = 0.85f;   // 连击数字高度（世界单位，比之前的大字小很多）
+        const float ComboDigitGap = 0.06f;      // 连击数字间距
+        const float ComboDigitAlpha = 0.7f;     // 连击数字透明度（半透明但看得清）
+        const float ComboTagAlpha = 0.85f;      // 连击标记透明度
+        const float ComboTagWidth = 1.15f;      // 连击标记宽度
+        const float ComboCenterY = -0.15f;      // 数字组的纵向位置（六边形中心略偏下）
+        const float ComboTagY = 0.72f;          // 连击标记的纵向位置（数字上方）
+        const int ComboMaxDigits = 5;           // 连击数字最多显示位数
 
         // 判定等级
         const int GradeBest = 0;
@@ -60,6 +69,8 @@ namespace RhythmPlayer.Play
         [SerializeField] Sprite coolSprite;          // Cool 判定字
         [SerializeField] Sprite goodSprite;          // Good 判定字
         [SerializeField] Sprite missSprite;          // Miss 判定字
+        [SerializeField] Sprite[] comboDigitSprites; // 连击数字 0-9（num-0 ~ num-9）
+        [SerializeField] Sprite comboTagSprite;      // 连击标记（ComboTAG，显示在数字上方）
 
         [Header("六边形布局（世界单位）")]
         [Tooltip("外六边形中心到顶点的距离")]
@@ -135,9 +146,10 @@ namespace RhythmPlayer.Play
         string[] padLabelTexts;     // 判定点标签文字（预生成，避免每帧分配）
         GUIStyle labelStyle;
         GUIStyle percentStyle;      // 右上角：准确率百分比
-        GUIStyle comboStyle;        // 正中心：连击数字
-        GUIStyle comboCaptionStyle; // 连击数字下方的小字
         AudioSource sfxSource;      // 打击音效音源（2D）
+        GameObject comboRoot;       // 正中心连击显示（世界精灵，渲染在音符之下）
+        readonly List<SpriteRenderer> comboDigits = new List<SpriteRenderer>(); // 连击数字位（对象池）
+        SpriteRenderer comboTag;    // 连击标记（COMBO 小字）
 
         // 判定统计
         int bestCount;
@@ -306,6 +318,7 @@ namespace RhythmPlayer.Play
         void Update()
         {
             if (comboPulse > 0f) comboPulse = Mathf.Max(0f, comboPulse - Time.deltaTime * 2.5f); // 连击弹跳衰减
+            UpdateComboDisplay();
             HandleInput();
             UpdateEffects();
             if (!ready || clock == null) return;
@@ -648,6 +661,66 @@ namespace RhythmPlayer.Play
             }
         }
 
+        /// <summary>
+        /// 正中心连击显示：用 num-* 数字图排成一行（世界精灵，渲染在音符下方），
+        /// 数字半透明、连击达到阈值才显示，增长时轻微弹跳。
+        /// </summary>
+        void UpdateComboDisplay()
+        {
+            if (comboRoot == null) return;
+
+            var visible = ready && combo >= ComboShowFrom && comboDigitSprites != null && comboDigitSprites.Length >= 10;
+            if (comboRoot.activeSelf != visible) comboRoot.SetActive(visible);
+            if (!visible) return;
+
+            // 数字宽度由图片比例推出（所有数字图尺寸一致）
+            var reference = comboDigitSprites[0];
+            var referenceSize = reference != null ? reference.bounds.size : Vector3.one;
+            var digitWidth = ComboDigitHeight * referenceSize.x / Mathf.Max(0.0001f, referenceSize.y);
+
+            var text = combo.ToString();
+            var count = Mathf.Min(text.Length, comboDigits.Count);
+            var totalWidth = count * digitWidth + (count - 1) * ComboDigitGap;
+            var startX = -totalWidth * 0.5f + digitWidth * 0.5f;
+
+            for (var i = 0; i < comboDigits.Count; i++)
+            {
+                var digit = comboDigits[i];
+                if (i >= count)
+                {
+                    if (digit.gameObject.activeSelf) digit.gameObject.SetActive(false);
+                    continue;
+                }
+
+                var sprite = comboDigitSprites[text[i] - '0'];
+                digit.gameObject.SetActive(true);
+                digit.sprite = sprite != null ? sprite : SpriteFactory.Square();
+                digit.color = new Color(1f, 1f, 1f, ComboDigitAlpha);
+                var scale = ComboDigitHeight / Mathf.Max(0.0001f, digit.sprite.bounds.size.y);
+                digit.transform.localScale = new Vector3(scale, scale, 1f);
+                digit.transform.localPosition = new Vector3(startX + i * (digitWidth + ComboDigitGap), ComboCenterY, 0f);
+            }
+
+            // 连击标记（数字上方的小字）
+            if (comboTagSprite != null)
+            {
+                comboTag.gameObject.SetActive(true);
+                comboTag.sprite = comboTagSprite;
+                comboTag.color = new Color(1f, 1f, 1f, ComboTagAlpha);
+                var tagScale = ComboTagWidth / Mathf.Max(0.0001f, comboTagSprite.bounds.size.x);
+                comboTag.transform.localScale = new Vector3(tagScale, tagScale, 1f);
+                comboTag.transform.localPosition = new Vector3(0f, ComboTagY, 0f);
+            }
+            else if (comboTag.gameObject.activeSelf)
+            {
+                comboTag.gameObject.SetActive(false);
+            }
+
+            // 增长时的轻微弹跳（整组缩放）
+            var pulse = 1f + 0.12f * comboPulse * comboPulse;
+            comboRoot.transform.localScale = new Vector3(pulse, pulse, 1f);
+        }
+
         // ===== 输入（键盘 + 触摸） =====
 
         void HandleInput()
@@ -878,6 +951,22 @@ namespace RhythmPlayer.Play
                 flash.gameObject.SetActive(false);
                 padFlashes[i] = flash;
             }
+
+            // 正中心连击显示：渲染顺序 2（低于音符的 9-11，所以音符会盖在连击数字上面）
+            comboRoot = new GameObject("ComboDisplay");
+            comboRoot.transform.SetParent(transform, false);
+            comboRoot.transform.localPosition = Vector3.zero;
+            comboRoot.SetActive(false);
+
+            for (var i = 0; i < ComboMaxDigits; i++)
+            {
+                var digit = CreateQuad(comboRoot.transform, "Digit" + i, 2, Color.white);
+                digit.gameObject.SetActive(false);
+                comboDigits.Add(digit);
+            }
+
+            comboTag = CreateQuad(comboRoot.transform, "ComboTag", 2, new Color(1f, 1f, 1f, ComboTagAlpha));
+            comboTag.gameObject.SetActive(false);
         }
 
         /// <summary>预生成判定点标签文字（避免每帧创建字符串）</summary>
@@ -894,7 +983,7 @@ namespace RhythmPlayer.Play
             var cam = Camera.main;
             if (cam == null || !ready) return; // 只有在装载了曲子后才画 HUD
 
-            // 样式（懒创建））
+            // 样式（懒创建）
             labelStyle ??= UiTheme.PadLabelStyle();
             percentStyle ??= new GUIStyle(GUI.skin.label)
             {
@@ -902,19 +991,6 @@ namespace RhythmPlayer.Play
                 alignment = TextAnchor.UpperRight,
                 fontStyle = FontStyle.Bold,
                 normal = { textColor = new Color(0.92f, 0.97f, 1f, 0.92f) },
-            };
-            comboStyle ??= new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 88,
-                alignment = TextAnchor.MiddleCenter,
-                fontStyle = FontStyle.Bold,
-                normal = { textColor = new Color(1f, 1f, 1f, 0.85f) },
-            };
-            comboCaptionStyle ??= new GUIStyle(GUI.skin.label)
-            {
-                fontSize = 18,
-                alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = new Color(0.6f, 0.85f, 1f, 0.55f) },
             };
 
             // 判定点标签（编号 + 按键）
@@ -928,21 +1004,8 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            // 右上角：准确率百分比
+            // 右上角：准确率百分比（连击数字是中心的世界精灵，见 UpdateComboDisplay）
             GUI.Label(new Rect(Screen.width - 340f, 16f, 320f, 40f), $"{Accuracy * 100f:0.00}%", percentStyle);
-
-            // 正中心：连击数（2 连以上才显示；增长时轻微弹跳）
-            if (combo >= 2)
-            {
-                var center = cam.WorldToScreenPoint(Vector3.zero);
-                var comboRect = new Rect(center.x - 220f, Screen.height - center.y - 80f, 440f, 120f);
-                var previousMatrix = GUI.matrix;
-                var pulse = 1f + 0.16f * comboPulse * comboPulse;
-                GUIUtility.ScaleAroundPivot(Vector2.one * pulse, new Vector2(comboRect.center.x, comboRect.center.y));
-                GUI.Label(comboRect, combo.ToString(), comboStyle);
-                GUI.matrix = previousMatrix;
-                GUI.Label(new Rect(comboRect.x, comboRect.y + 96f, comboRect.width, 24f), "COMBO", comboCaptionStyle);
-            }
         }
 
         /// <summary>按键显示名（逗号/句号显示为符号）</summary>
