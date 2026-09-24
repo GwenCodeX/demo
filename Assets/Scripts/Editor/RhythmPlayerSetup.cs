@@ -158,6 +158,7 @@ namespace RhythmPlayer.EditorTools
             serialized.FindProperty("coolSprite").objectReferenceValue = LoadSprite(SkinFolder + "/cool.png");
             serialized.FindProperty("goodSprite").objectReferenceValue = LoadSprite(SkinFolder + "/good.png");
             serialized.FindProperty("missSprite").objectReferenceValue = LoadSprite(SkinFolder + "/miss.png");
+            serialized.FindProperty("hitSound").objectReferenceValue = AssetDatabase.LoadAssetAtPath<AudioClip>(SkinFolder + "/cube-arcade.wav");
 
             var fxProperty = serialized.FindProperty("hitFxFrames");
             fxProperty.arraySize = HitFxFrameCount;

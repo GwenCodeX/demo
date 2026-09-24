@@ -85,6 +85,11 @@ namespace RhythmPlayer.Play
         [Tooltip("触摸判定半径（世界单位）")]
         [SerializeField] float touchRadius = 1.1f;
 
+        [Header("音效")]
+        [SerializeField] AudioClip hitSound;          // 打击音效（命中/空按；建议用皮肤里的 cube-arcade.wav）
+        [Range(0f, 1f)]
+        [SerializeField] float hitSoundVolume = 0.7f; // 命中音量
+
         [Header("启动")]
         [Tooltip("自动演示：自动在拍点打出 Best；Tab 切换手动")]
         [SerializeField] bool autoPlay = true;
@@ -129,9 +134,10 @@ namespace RhythmPlayer.Play
         SpriteRenderer backgroundRenderer; // 当前背景（换曲时替换精灵）
         string[] padLabelTexts;     // 判定点标签文字（预生成，避免每帧分配）
         GUIStyle labelStyle;
-        GUIStyle hudPanelStyle;
-        GUIStyle hudModeStyle;
-        GUIStyle hudStatsStyle;
+        GUIStyle percentStyle;      // 右上角：准确率百分比
+        GUIStyle comboStyle;        // 正中心：连击数字
+        GUIStyle comboCaptionStyle; // 连击数字下方的小字
+        AudioSource sfxSource;      // 打击音效音源（2D）
 
         // 判定统计
         int bestCount;
@@ -139,6 +145,8 @@ namespace RhythmPlayer.Play
         int goodCount;
         int missCount;
         int combo;
+        int maxCombo;               // 最大连击
+        float comboPulse;           // 连击数字弹跳动画计时（1 → 0 衰减）
 
         void Start()
         {
@@ -146,6 +154,12 @@ namespace RhythmPlayer.Play
             QualitySettings.vSyncCount = 1; // 垂直同步，画面更顺滑
             BuildVisuals();
             BuildPadLabels();
+
+            // 打击音效音源（2D 播放，多个音效可叠加）
+            sfxSource = gameObject.AddComponent<AudioSource>();
+            sfxSource.playOnAwake = false;
+            sfxSource.spatialBlend = 0f;
+
             // 谱面由 GameRoot 通过 LoadSong 装载
         }
 
@@ -199,7 +213,52 @@ namespace RhythmPlayer.Play
             goodCount = 0;
             missCount = 0;
             combo = 0;
+            maxCombo = 0;
+            comboPulse = 0f;
         }
+
+        // ===== 结算数据（GameRoot 读取） =====
+
+        /// <summary>Best 数量</summary>
+        public int BestCount => bestCount;
+        /// <summary>Cool 数量</summary>
+        public int CoolCount => coolCount;
+        /// <summary>Good 数量</summary>
+        public int GoodCount => goodCount;
+        /// <summary>Miss 数量</summary>
+        public int MissCount => missCount;
+        /// <summary>最大连击</summary>
+        public int MaxCombo => maxCombo;
+        /// <summary>谱面音符总数</summary>
+        public int TotalNotes => chart != null ? chart.Notes.Count : 0;
+
+        /// <summary>准确率（0-1）：Best=100%、Cool=80%、Good=60%、Miss=0%，按已判定音符计算</summary>
+        public float Accuracy
+        {
+            get
+            {
+                var judged = bestCount + coolCount + goodCount + missCount;
+                if (judged <= 0) return 1f;
+                return (bestCount + coolCount * 0.8f + goodCount * 0.6f) / judged;
+            }
+        }
+
+        /// <summary>分数（0-1000000）：按整谱音符数计算，全 Best 为满分</summary>
+        public int Score
+        {
+            get
+            {
+                if (chart == null || chart.Notes.Count == 0) return 0;
+                var weight = bestCount + coolCount * 0.8f + goodCount * 0.6f;
+                return Mathf.RoundToInt(1000000f * weight / chart.Notes.Count);
+            }
+        }
+
+        /// <summary>当前下落速度（每拍距离）</summary>
+        public float NoteSpeed => unitsPerBeat;
+
+        /// <summary>设置下落速度（设置项，范围 0.6 ~ 6）</summary>
+        public void SetNoteSpeed(float value) => unitsPerBeat = Mathf.Clamp(value, 0.6f, 6f);
 
         /// <summary>换背景图（歌曲包没带背景时隐藏背景）</summary>
         void RefreshBackground(string path)
@@ -253,6 +312,7 @@ namespace RhythmPlayer.Play
 
         void Update()
         {
+            if (comboPulse > 0f) comboPulse = Mathf.Max(0f, comboPulse - Time.deltaTime * 2.5f); // 连击弹跳衰减
             HandleInput();
             UpdateEffects();
             if (!ready || clock == null) return;
@@ -456,7 +516,10 @@ namespace RhythmPlayer.Play
             else if (grade == GradeCool) coolCount++;
             else goodCount++;
             combo++;
+            if (combo > maxCombo) maxCombo = combo;
+            comboPulse = 1f;                                    // 触发连击数字弹跳
 
+            PlayHitSound(hitSoundVolume);                       // 命中音效
             SpawnFx(radial * apothem);                          // 打击特效在判定点上
             SpawnPopup(radial * (apothem - 0.75f), grade == GradeBest ? bestSprite : grade == GradeCool ? coolSprite : goodSprite);
             if (!view.Note.IsHold) view.Vanish = true;          // 单点打中即消失；长条继续被"消耗"
@@ -482,11 +545,22 @@ namespace RhythmPlayer.Play
                     bestIndex = i;
                 }
             }
-            if (bestIndex < 0) return; // 附近没有音符，按了个寂寞
+            if (bestIndex < 0)
+            {
+                PlayHitSound(hitSoundVolume * 0.3f); // 附近没有音符：给一个轻微的空按反馈
+                return;
+            }
 
             var ms = bestDelta * 1000f;
             var grade = ms <= BestWindowMs ? GradeBest : ms <= CoolWindowMs ? GradeCool : GradeGood;
             ApplyJudgment(active[bestIndex], grade);
+        }
+
+        /// <summary>播放打击音效（多个音叠加时 PlayOneShot 会自动混音）</summary>
+        void PlayHitSound(float volume)
+        {
+            if (sfxSource == null || hitSound == null || volume <= 0.001f) return;
+            sfxSource.PlayOneShot(hitSound, volume);
         }
 
         // ===== 特效（打击动画 / 判定字） =====
@@ -825,22 +899,29 @@ namespace RhythmPlayer.Play
         void OnGUI()
         {
             var cam = Camera.main;
-            if (cam == null) return;
+            if (cam == null || !ready) return; // 只有在装载了曲子后才画 HUD
 
-            // 样式（懒创建；UiTheme 提供科技风底图）
+            // 样式（懒创建））
             labelStyle ??= UiTheme.PadLabelStyle();
-            hudPanelStyle ??= UiTheme.PanelStyle();
-            hudModeStyle ??= new GUIStyle(GUI.skin.label)
+            percentStyle ??= new GUIStyle(GUI.skin.label)
             {
-                fontSize = 16,
+                fontSize = 30,
                 alignment = TextAnchor.UpperRight,
-                normal = { textColor = new Color(0.55f, 0.9f, 1f, 0.9f) },
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(0.92f, 0.97f, 1f, 0.92f) },
             };
-            hudStatsStyle ??= new GUIStyle(GUI.skin.label)
+            comboStyle ??= new GUIStyle(GUI.skin.label)
             {
-                fontSize = 19,
-                alignment = TextAnchor.UpperRight,
-                normal = { textColor = UiTheme.TextMain },
+                fontSize = 88,
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(1f, 1f, 1f, 0.85f) },
+            };
+            comboCaptionStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 18,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = new Color(0.6f, 0.85f, 1f, 0.55f) },
             };
 
             // 判定点标签（编号 + 按键）
@@ -848,19 +929,27 @@ namespace RhythmPlayer.Play
             {
                 for (var i = 0; i < 6; i++)
                 {
-                    var screen = cam.WorldToScreenPoint(PadPosition(i) * 0.82f);
-                    if (screen.z <= 0f) continue;
-                    GUI.Label(new Rect(screen.x - 45f, Screen.height - screen.y - 12f, 90f, 24f), padLabelTexts[i], labelStyle);
+                    var padScreen = cam.WorldToScreenPoint(PadPosition(i) * 0.82f);
+                    if (padScreen.z <= 0f) continue;
+                    GUI.Label(new Rect(padScreen.x - 45f, Screen.height - padScreen.y - 12f, 90f, 24f), padLabelTexts[i], labelStyle);
                 }
             }
 
-            // 右上角统计面板（圆角半透明面板 + 两行信息）
-            var mode = autoPlay ? "自动演示" : "手动游玩";
-            var panelRect = new Rect(Screen.width - 596f, 14f, 578f, 84f);
-            GUI.Box(panelRect, GUIContent.none, hudPanelStyle);
-            GUI.Label(new Rect(panelRect.x + 16f, panelRect.y + 10f, panelRect.width - 32f, 24f), mode + "（Tab 切换）", hudModeStyle);
-            GUI.Label(new Rect(panelRect.x + 16f, panelRect.y + 40f, panelRect.width - 32f, 30f),
-                $"Best {bestCount}   Cool {coolCount}   Good {goodCount}   Miss {missCount}      Combo {combo}", hudStatsStyle);
+            // 右上角：准确率百分比
+            GUI.Label(new Rect(Screen.width - 340f, 16f, 320f, 40f), $"{Accuracy * 100f:0.00}%", percentStyle);
+
+            // 正中心：连击数（2 连以上才显示；增长时轻微弹跳）
+            if (combo >= 2)
+            {
+                var center = cam.WorldToScreenPoint(Vector3.zero);
+                var comboRect = new Rect(center.x - 220f, Screen.height - center.y - 80f, 440f, 120f);
+                var previousMatrix = GUI.matrix;
+                var pulse = 1f + 0.16f * comboPulse * comboPulse;
+                GUIUtility.ScaleAroundPivot(Vector2.one * pulse, new Vector2(comboRect.center.x, comboRect.center.y));
+                GUI.Label(comboRect, combo.ToString(), comboStyle);
+                GUI.matrix = previousMatrix;
+                GUI.Label(new Rect(comboRect.x, comboRect.y + 96f, comboRect.width, 24f), "COMBO", comboCaptionStyle);
+            }
         }
 
         /// <summary>按键显示名（逗号/句号显示为符号）</summary>
