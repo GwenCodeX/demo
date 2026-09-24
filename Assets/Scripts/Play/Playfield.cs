@@ -232,27 +232,20 @@ namespace RhythmPlayer.Play
         /// <summary>谱面音符总数</summary>
         public int TotalNotes => chart != null ? chart.Notes.Count : 0;
 
-        /// <summary>准确率（0-1）：Best=100%、Cool=80%、Good=60%、Miss=0%，按已判定音符计算</summary>
+        /// <summary>完成度百分比（0-1）：Best=100%、Cool=80%、Good=60%、Miss=0%，按整谱音符数计算。
+        /// 开局 0%，随打随涨，全 Best 到 100%（结算时与"准确率"一致）。</summary>
         public float Accuracy
         {
             get
             {
-                var judged = bestCount + coolCount + goodCount + missCount;
-                if (judged <= 0) return 1f;
-                return (bestCount + coolCount * 0.8f + goodCount * 0.6f) / judged;
+                if (chart == null || chart.Notes.Count == 0) return 0f;
+                var weight = bestCount + coolCount * 0.8f + goodCount * 0.6f;
+                return weight / chart.Notes.Count;
             }
         }
 
-        /// <summary>分数（0-1000000）：按整谱音符数计算，全 Best 为满分</summary>
-        public int Score
-        {
-            get
-            {
-                if (chart == null || chart.Notes.Count == 0) return 0;
-                var weight = bestCount + coolCount * 0.8f + goodCount * 0.6f;
-                return Mathf.RoundToInt(1000000f * weight / chart.Notes.Count);
-            }
-        }
+        /// <summary>分数（0-1000000）：等于完成度 × 1,000,000（全 Best 满分）</summary>
+        public int Score => Mathf.RoundToInt(Accuracy * 1000000f);
 
         /// <summary>当前下落速度（每拍距离）</summary>
         public float NoteSpeed => unitsPerBeat;
