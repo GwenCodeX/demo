@@ -9,8 +9,21 @@ using UnityEngine.Networking;
 
 namespace RhythmPlayer.Core
 {
+    /// <summary>歌曲的一个难度（对应一张谱面）</summary>
+    public sealed class SongDifficulty
+    {
+        /// <summary>难度名（Malody 用 .mc 的 version 字段；文本谱面为空）</summary>
+        public string Name;
+
+        /// <summary>谱面文件路径（.txt 或 .mc）</summary>
+        public string ChartPath;
+
+        /// <summary>音符数</summary>
+        public int NoteCount;
+    }
+
     /// <summary>
-    /// 一首歌的完整信息。一个"谱面包"对应一首歌（Malody 包里的每个 .mc 难度各算一首）。
+    /// 一首歌的完整信息。一个"谱面包"对应一首歌；同一首歌的多张谱面 = 多个难度。
     /// </summary>
     public sealed class SongInfo
     {
@@ -32,14 +45,32 @@ namespace RhythmPlayer.Core
         /// <summary>音频文件路径（.mp3 / .ogg / .wav）</summary>
         public string AudioPath;
 
-        /// <summary>谱面文件路径（.txt 文本谱面 或 .mc Malody 谱面）</summary>
-        public string ChartPath;
-
         /// <summary>背景图路径（可为空）</summary>
         public string BackgroundPath;
 
-        /// <summary>音符总数（扫描时顺带解析得到；0 = 未知）</summary>
-        public int NoteCount;
+        /// <summary>所有难度（按音符数升序；最高的在最后）</summary>
+        public readonly List<SongDifficulty> Difficulties = new List<SongDifficulty>();
+
+        /// <summary>当前选中的难度索引（默认最高难度）</summary>
+        public int SelectedDifficulty;
+
+        /// <summary>当前选中的难度</summary>
+        public SongDifficulty Current =>
+            Difficulties.Count == 0 ? null : Difficulties[Mathf.Clamp(SelectedDifficulty, 0, Difficulties.Count - 1)];
+
+        /// <summary>当前选中难度的谱面路径</summary>
+        public string ChartPath => Current != null ? Current.ChartPath : null;
+
+        /// <summary>当前选中难度的音符数</summary>
+        public int NoteCount => Current != null ? Current.NoteCount : 0;
+
+        /// <summary>难度的显示名（没有名字时：单难度显示"默认"，多难度按序号排）</summary>
+        public string DifficultyLabel(int index)
+        {
+            if (index < 0 || index >= Difficulties.Count) return "";
+            if (!string.IsNullOrEmpty(Difficulties[index].Name)) return Difficulties[index].Name;
+            return Difficulties.Count > 1 ? "难度" + (index + 1) : "默认";
+        }
     }
 
     /// <summary>
@@ -194,16 +225,13 @@ namespace RhythmPlayer.Core
         /// <summary>在一个文件夹里找歌；自身不是歌就看下一层（压缩包解出的外层目录 / 合集包）</summary>
         static void CollectSongs(string folder, List<SongInfo> songs, int depth)
         {
-            // Malody 谱面包：文件夹里直接有 .mc
+            // Malody 谱面包：文件夹里直接有 .mc（多个 .mc = 同一首歌的多个难度）
             var mcFiles = Directory.GetFiles(folder, "*.mc");
             if (mcFiles.Length > 0)
             {
                 Array.Sort(mcFiles, StringComparer.Ordinal);
-                foreach (var mc in mcFiles)
-                {
-                    var song = LoadMalodySong(folder, mc);
-                    if (song != null) songs.Add(song);
-                }
+                var malodySong = LoadMalodySong(folder, mcFiles);
+                if (malodySong != null) songs.Add(malodySong);
                 return;
             }
 
@@ -223,39 +251,51 @@ namespace RhythmPlayer.Core
             }
         }
 
-        /// <summary>Malody 谱面包：标题/BPM/背景来自 .mc，音频优先找与 .mc 同名的文件</summary>
-        static SongInfo LoadMalodySong(string folder, string mcPath)
+        /// <summary>Malody 谱面包：一个文件夹里的多个 .mc = 同一首歌的多个难度，自带难度名（version）</summary>
+        static SongInfo LoadMalodySong(string folder, string[] mcFiles)
         {
-            var meta = MalodyChartParser.ReadMeta(mcPath);
-            if (meta == null) return null;
+            var mainMeta = MalodyChartParser.ReadMeta(mcFiles[0]);
+            if (mainMeta == null) return null;
 
-            var baseName = Path.GetFileNameWithoutExtension(mcPath);
+            var baseName = Path.GetFileNameWithoutExtension(mcFiles[0]);
             var audio = FindFirst(folder, new[] { baseName + ".ogg", baseName + ".mp3", baseName + ".wav" })
                         ?? FindFirst(folder, new[] { "audio.ogg", "audio.mp3", "audio.wav" })
                         ?? FindByExtension(folder, new[] { ".ogg", ".mp3", ".wav" });
             if (audio == null)
             {
-                Debug.LogWarning($"[歌曲] Malody 谱面 {mcPath} 缺少音频，跳过");
+                Debug.LogWarning($"[歌曲] Malody 谱面 {folder} 缺少音频，跳过");
                 return null;
             }
-
-            var name = meta.Title;
-            if (!string.IsNullOrEmpty(meta.Version)) name += " [" + meta.Version + "]";
 
             var song = new SongInfo
             {
                 Folder = folder,
-                Name = name,
-                Artist = meta.Artist,
-                Bpm = meta.Bpm,
+                Name = mainMeta.Title,
+                Artist = mainMeta.Artist,
+                Bpm = mainMeta.Bpm,
                 AudioPath = audio,
-                ChartPath = mcPath,
-                NoteCount = meta.NoteCount,
             };
 
-            if (!string.IsNullOrEmpty(meta.BackgroundFile))
+            foreach (var mc in mcFiles)
             {
-                var background = Path.Combine(folder, meta.BackgroundFile);
+                var meta = MalodyChartParser.ReadMeta(mc);
+                if (meta == null) continue;
+                song.Difficulties.Add(new SongDifficulty
+                {
+                    Name = meta.Version,
+                    ChartPath = mc,
+                    NoteCount = meta.NoteCount,
+                });
+            }
+            if (song.Difficulties.Count == 0) return null;
+
+            // 按音符数升序 → 默认选中最高难度
+            song.Difficulties.Sort((a, b) => a.NoteCount.CompareTo(b.NoteCount));
+            song.SelectedDifficulty = song.Difficulties.Count - 1;
+
+            if (!string.IsNullOrEmpty(mainMeta.BackgroundFile))
+            {
+                var background = Path.Combine(folder, mainMeta.BackgroundFile);
                 if (File.Exists(background)) song.BackgroundPath = background;
             }
             return song;
@@ -286,7 +326,6 @@ namespace RhythmPlayer.Core
                 Folder = folder,
                 Name = Path.GetFileName(folder),
                 AudioPath = audio,
-                ChartPath = chart,
             };
 
             // musicInfo.json（可选）：歌名 / 曲师 / BPM / 拍偏移
@@ -311,7 +350,13 @@ namespace RhythmPlayer.Core
             }
 
             song.BackgroundPath = FindFirst(folder, new[] { "bg.jpg", "bg.png" });
-            song.NoteCount = ChartParser.LoadFile(chart).Notes.Count; // 顺带统计音符数（选曲列表展示用）
+            song.Difficulties.Add(new SongDifficulty
+            {
+                Name = "",
+                ChartPath = chart,
+                NoteCount = ChartParser.LoadFile(chart).Notes.Count,
+            });
+            song.SelectedDifficulty = 0;
             return song;
         }
 
@@ -399,6 +444,38 @@ namespace RhythmPlayer.Core
                     Directory.CreateDirectory(Path.GetDirectoryName(destination) ?? targetFull);
                     entry.ExtractToFile(destination, true);
                 }
+            }
+        }
+
+        /// <summary>删除一首歌：删除其来源（歌曲文件夹，或压缩包 + 解压缓存）</summary>
+        public static bool DeleteSong(SongInfo song)
+        {
+            if (song == null || string.IsNullOrEmpty(song.Folder)) return false;
+            try
+            {
+                var folder = Path.GetFullPath(song.Folder);
+                var unpackRoot = Path.GetFullPath(UnpackRoot);
+
+                // 压缩包解出来的歌：把根目录下的原压缩包一起删掉（否则下次启动会重新解出来）
+                if (folder.StartsWith(unpackRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    var cacheName = Path.GetFileName(folder);
+                    foreach (var extension in new[] { ".zip", ".mcz" })
+                    {
+                        var archive = Path.Combine(Root, cacheName + extension);
+                        if (File.Exists(archive)) File.Delete(archive);
+                    }
+                }
+
+                if (Directory.Exists(folder)) Directory.Delete(folder, true);
+                if (File.Exists(folder + ".meta")) File.Delete(folder + ".meta");
+                Debug.Log($"[导入] 已删除歌曲 {song.Name}（{folder}）");
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[导入] 删除歌曲 {song.Name} 失败：{e.Message}");
+                return false;
             }
         }
 

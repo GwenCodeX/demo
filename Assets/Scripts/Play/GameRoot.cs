@@ -63,6 +63,7 @@ namespace RhythmPlayer.Play
         int fpsIndex = FpsPresets.Length - 1;
         bool autoPlayEnabled = true;
         int rebindLane = -1;
+        int pendingDelete = -1;
         float resultTimer;
         float maxDriftMs;
         int selectedIndex;
@@ -94,6 +95,7 @@ namespace RhythmPlayer.Play
         GUIStyle pathStyle;
         GUIStyle selectTitleStyle;
         GUIStyle previewLabelStyle;
+        GUIStyle deleteTextStyle;
 
         static bool IsTouchPlatform =>
             Application.platform == RuntimePlatform.Android || Application.platform == RuntimePlatform.IPhonePlayer;
@@ -274,6 +276,53 @@ namespace RhythmPlayer.Play
             StartCoroutine(LoadSongRoutine(index, true));
         }
 
+        /// <summary>切换难度：同一首歌已加载时只换谱面并重播试听，避免重新解码音频</summary>
+        void SetDifficulty(int index)
+        {
+            if (songs.Count == 0) return;
+            var song = songs[selectedIndex];
+            if (index < 0 || index >= song.Difficulties.Count || index == song.SelectedDifficulty) return;
+            song.SelectedDifficulty = index;
+
+            if (loadedIndex == selectedIndex && clock != null && clock.HasClip)
+            {
+                if (playfield != null)
+                {
+                    playfield.LoadSong(song);
+                    playfield.SetAutoPlay(true);
+                }
+                previewActive = true;
+                clock.PlayFrom(previewStartTime);
+            }
+            else
+            {
+                SelectSong(selectedIndex);
+            }
+        }
+
+        /// <summary>删除歌曲（带确认）：删除来源文件后重新扫描并续播试听</summary>
+        void DoDelete(int index)
+        {
+            pendingDelete = -1;
+            if (index < 0 || index >= songs.Count) return;
+
+            SongRepository.DeleteSong(songs[index]);
+            loadedIndex = -1;
+            previewActive = false;
+            if (clock != null) clock.Stop();
+            if (playfield != null) playfield.ClearForSelect();
+
+            RefreshSongs();
+            menuTimer = 0f;
+            if (songs.Count == 0)
+            {
+                selectedIndex = 0;
+                return;
+            }
+            selectedIndex = Mathf.Clamp(selectedIndex, 0, songs.Count - 1);
+            SelectSong(selectedIndex);
+        }
+
         void StartSelectedSong()
         {
             if (songs.Count == 0 || state == State.Loading) return;
@@ -331,7 +380,11 @@ namespace RhythmPlayer.Play
                         StartSelectedSong();
                         break;
                     }
-                    if (Input.GetKeyDown(KeyCode.Escape)) EnterMainMenu();
+                    if (Input.GetKeyDown(KeyCode.Escape))
+                    {
+                        if (pendingDelete >= 0) pendingDelete = -1;
+                        else EnterMainMenu();
+                    }
                     UpdatePreviewLoop();
                     break;
 
@@ -875,6 +928,42 @@ namespace RhythmPlayer.Play
                 var dots = new string('.', 1 + (int)(Time.unscaledTime * 3f) % 3);
                 GUI.Box(new Rect((UiTheme.Width - 520f) * 0.5f, UiTheme.Height - 200f, 520f, 64f), loadingText + dots, loadingStyle);
             }
+
+            if (pendingDelete >= 0 && pendingDelete < songs.Count) DrawDeleteConfirm(songs[pendingDelete]);
+        }
+
+        /// <summary>删除确认弹窗</summary>
+        void DrawDeleteConfirm(SongInfo song)
+        {
+            resultPanelStyle ??= UiTheme.PanelStyle();
+            menuButtonStyle ??= UiTheme.MenuButtonStyle();
+            menuTitleStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 30,
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = UiTheme.TextMain },
+            };
+            deleteTextStyle ??= new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 22,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = UiTheme.TextMain },
+            };
+            hintStyle ??= UiTheme.HintStyle();
+
+            GUI.color = new Color(0f, 0f, 0f, 0.6f);
+            GUI.DrawTexture(new Rect(0f, 0f, UiTheme.Width, UiTheme.Height), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+
+            var panel = new Rect((UiTheme.Width - 520f) * 0.5f, (UiTheme.Height - 300f) * 0.5f, 520f, 300f);
+            GUI.Box(panel, GUIContent.none, resultPanelStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 26f, panel.width, 40f), "删除歌曲", menuTitleStyle);
+            GUI.Label(new Rect(panel.x + 20f, panel.y + 84f, panel.width - 40f, 30f), $"确认删除「{song.Name}」？", deleteTextStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 124f, panel.width, 26f), "将删除歌曲文件，无法恢复", hintStyle);
+
+            if (GUI.Button(new Rect(panel.x + 40f, panel.y + 180f, 200f, 70f), "确认删除", menuButtonStyle)) DoDelete(pendingDelete);
+            if (GUI.Button(new Rect(panel.x + 280f, panel.y + 180f, 200f, 70f), "取消", menuButtonStyle)) pendingDelete = -1;
         }
 
         void DrawSelectedSongPanel()
@@ -892,10 +981,24 @@ namespace RhythmPlayer.Play
             {
                 var song = songs[selectedIndex];
                 var artist = string.IsNullOrEmpty(song.Artist) ? "未知曲师" : song.Artist;
-                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 34f, leftPanel.width - 68f, 48f), song.Name, songNameStyle);
-                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 90f, leftPanel.width - 68f, 30f), artist, songInfoStyle);
-                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 124f, leftPanel.width - 68f, 30f),
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 30f, leftPanel.width - 68f, 48f), song.Name, songNameStyle);
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 84f, leftPanel.width - 68f, 30f), artist, songInfoStyle);
+                GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 114f, leftPanel.width - 68f, 30f),
                     $"BPM {song.Bpm:0}" + (song.NoteCount > 0 ? $"      音符 {song.NoteCount}" : ""), songInfoStyle);
+
+                // 难度选择（单难度只显示一个"默认"；默认选中最高难度）
+                var difficultyCount = Mathf.Min(song.Difficulties.Count, 6);
+                if (difficultyCount > 0)
+                {
+                    var cellWidth = (leftPanel.width - 68f - (difficultyCount - 1) * 8f) / difficultyCount;
+                    for (var d = 0; d < difficultyCount; d++)
+                    {
+                        var rect = new Rect(leftPanel.x + 34f + d * (cellWidth + 8f), leftPanel.y + 150f, cellWidth, 42f);
+                        var selected = d == song.SelectedDifficulty;
+                        if (GUI.Button(rect, song.DifficultyLabel(d), selected ? menuRowSelectedStyle : smallButtonStyle)) SetDifficulty(d);
+                    }
+                }
+
                 if (previewActive)
                 {
                     previewLabelStyle ??= new GUIStyle(GUI.skin.label)
@@ -904,11 +1007,12 @@ namespace RhythmPlayer.Play
                         alignment = TextAnchor.MiddleLeft,
                         normal = { textColor = UiTheme.Accent },
                     };
-                    GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 158f, leftPanel.width - 68f, 28f), "试听中……", previewLabelStyle);
+                    GUI.Label(new Rect(leftPanel.x + 34f, leftPanel.y + 196f, leftPanel.width - 68f, 26f), "试听中……", previewLabelStyle);
                 }
 
-                if (GUI.Button(new Rect(leftPanel.x + 34f, leftPanel.y + 216f, 300f, 88f), "开始 ▶", menuButtonStyle)) StartSelectedSong();
-                if (GUI.Button(new Rect(leftPanel.x + 348f, leftPanel.y + 216f, 238f, 88f), "返回主菜单", smallButtonStyle)) EnterMainMenu();
+                if (GUI.Button(new Rect(leftPanel.x + 34f, leftPanel.y + 228f, 260f, 84f), "开始 ▶", menuButtonStyle)) StartSelectedSong();
+                if (GUI.Button(new Rect(leftPanel.x + 304f, leftPanel.y + 228f, 150f, 84f), "返回主菜单", smallButtonStyle)) EnterMainMenu();
+                if (GUI.Button(new Rect(leftPanel.x + 464f, leftPanel.y + 228f, 122f, 84f), "删除歌曲", smallButtonStyle)) pendingDelete = selectedIndex;
             }
             else
             {

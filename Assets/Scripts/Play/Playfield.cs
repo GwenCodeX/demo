@@ -95,6 +95,7 @@ namespace RhythmPlayer.Play
             public ChartNote Note;
             public bool Judged;
             public bool Vanish;
+            public bool HoldActive;
         }
 
         sealed class Effect
@@ -114,6 +115,8 @@ namespace RhythmPlayer.Play
         readonly List<SpriteRenderer> comboDigits = new List<SpriteRenderer>();
         readonly SpriteRenderer[] padFlashes = new SpriteRenderer[6];
         readonly float[] padFlashTimer = new float[6];
+        readonly float[] padMissTimer = new float[6];
+        readonly bool[] laneTouchHeld = new bool[6];
 
         ChartData chart;
         int nextIndex;
@@ -123,6 +126,7 @@ namespace RhythmPlayer.Play
         GameObject comboRoot;
         SpriteRenderer comboTag;
         AudioSource sfxSource;
+        AudioSource missSource;
         Camera mainCamera;
 
         string percentText = "0.00%";
@@ -139,6 +143,7 @@ namespace RhythmPlayer.Play
         int combo;
         int maxCombo;
         float comboPulse;
+        float comboBreakFlash;
 
         void Start()
         {
@@ -156,6 +161,12 @@ namespace RhythmPlayer.Play
             sfxSource = gameObject.AddComponent<AudioSource>();
             sfxSource.playOnAwake = false;
             sfxSource.spatialBlend = 0f;
+
+            // Miss / 断连专用音源：同素材降调，听感区分
+            missSource = gameObject.AddComponent<AudioSource>();
+            missSource.playOnAwake = false;
+            missSource.spatialBlend = 0f;
+            missSource.pitch = 0.7f;
         }
 
         public void LoadSong(SongInfo song)
@@ -208,6 +219,7 @@ namespace RhythmPlayer.Play
             combo = 0;
             maxCombo = 0;
             comboPulse = 0f;
+            comboBreakFlash = 0f;
         }
 
         public int BestCount => bestCount;
@@ -296,6 +308,7 @@ namespace RhythmPlayer.Play
         void Update()
         {
             if (comboPulse > 0f) comboPulse = Mathf.Max(0f, comboPulse - Time.deltaTime * 2.5f);
+            if (comboBreakFlash > 0f) comboBreakFlash = Mathf.Max(0f, comboBreakFlash - Time.deltaTime * 1.8f);
             UpdateComboDisplay();
             HandleInput();
             UpdateEffects();
@@ -338,6 +351,28 @@ namespace RhythmPlayer.Play
                 {
                     Release(i);
                     continue;
+                }
+
+                // 长条按持：手动模式提前松手 = 断连（Miss）
+                if (note.IsHold && view.HoldActive && !autoPlay)
+                {
+                    var holdLane = Mathf.Clamp(note.Lane, 0, 5);
+                    if (!IsLaneHeld(holdLane))
+                    {
+                        if (nowSeconds < clock.BeatToSeconds(note.EndBeat) - 0.12f)
+                        {
+                            view.HoldActive = false;
+                            RegisterMiss(holdLane);
+                            SpawnPopup(PadDirection(holdLane) * (hexRadius * 0.866f - 0.75f), missSprite);
+                            Release(i);
+                            continue;
+                        }
+                        view.HoldActive = false; // 按住到尾部，正常结束
+                    }
+                    else
+                    {
+                        padFlashTimer[holdLane] = Mathf.Max(padFlashTimer[holdLane], 0.08f); // 按住期间判定点持续亮
+                    }
                 }
 
                 var lane = Mathf.Clamp(note.Lane, 0, 5);
@@ -429,6 +464,7 @@ namespace RhythmPlayer.Play
             view.Note = note;
             view.Judged = false;
             view.Vanish = false;
+            view.HoldActive = false;
 
             if (note.IsHold)
             {
@@ -467,8 +503,7 @@ namespace RhythmPlayer.Play
 
             if (grade == GradeMiss)
             {
-                missCount++;
-                combo = 0;
+                RegisterMiss(lane);
                 SpawnPopup(radial * (apothem - 0.75f), missSprite);
                 return;
             }
@@ -479,11 +514,24 @@ namespace RhythmPlayer.Play
             combo++;
             if (combo > maxCombo) maxCombo = combo;
             comboPulse = 1f;
+            padFlashTimer[lane] = Mathf.Max(padFlashTimer[lane], 0.12f); // 命中即亮判定点
 
             PlayHitSound(hitSoundVolume);
             SpawnFx(radial * apothem);
             SpawnPopup(radial * (apothem - 0.75f), grade == GradeBest ? bestSprite : grade == GradeCool ? coolSprite : goodSprite);
+
             if (!view.Note.IsHold) view.Vanish = true;
+            else view.HoldActive = true; // 长条进入按持状态
+        }
+
+        /// <summary>Miss / 长条断开统一处理：清零连击、判定点红闪、Miss 音效</summary>
+        void RegisterMiss(int lane)
+        {
+            missCount++;
+            if (combo > 0) comboBreakFlash = 1f;
+            combo = 0;
+            padMissTimer[lane] = 0.35f;
+            if (missSource != null && hitSound != null) missSource.PlayOneShot(hitSound, 0.5f);
         }
 
         void TryJudgeByInput(int lane)
@@ -645,7 +693,10 @@ namespace RhythmPlayer.Play
                 var sprite = comboDigitSprites[comboTextCache[i] - '0'];
                 digit.gameObject.SetActive(true);
                 digit.sprite = sprite != null ? sprite : SpriteFactory.Square();
-                digit.color = new Color(1f, 1f, 1f, ComboDigitAlpha);
+                var tint = comboBreakFlash > 0.01f
+                    ? Color.Lerp(new Color(1f, 0.45f, 0.45f), Color.white, 1f - comboBreakFlash)
+                    : Color.white;
+                digit.color = new Color(tint.r, tint.g, tint.b, ComboDigitAlpha);
                 var scale = ComboDigitHeight / Mathf.Max(0.0001f, digit.sprite.bounds.size.y);
                 digit.transform.localScale = new Vector3(scale, scale, 1f);
                 digit.transform.localPosition = new Vector3(startX + i * (digitWidth + ComboDigitGap), ComboCenterY, 0f);
@@ -686,7 +737,13 @@ namespace RhythmPlayer.Play
 
             for (var i = 0; i < padFlashes.Length; i++)
             {
-                if (padFlashTimer[i] > 0f)
+                if (padMissTimer[i] > 0f)
+                {
+                    padMissTimer[i] -= Time.deltaTime;
+                    padFlashes[i].gameObject.SetActive(true);
+                    padFlashes[i].color = new Color(1f, 0.3f, 0.3f, 0.25f + 0.55f * Mathf.Clamp01(padMissTimer[i] / 0.35f));
+                }
+                else if (padFlashTimer[i] > 0f)
                 {
                     padFlashTimer[i] -= Time.deltaTime;
                     var alpha = Mathf.Clamp01(padFlashTimer[i] / 0.18f) * 0.85f;
@@ -702,8 +759,16 @@ namespace RhythmPlayer.Play
             HandleTouch();
         }
 
+        bool IsLaneHeld(int lane)
+        {
+            var key = GetJudgeKey(lane);
+            if (key != KeyCode.None && Input.GetKey(key)) return true;
+            return laneTouchHeld[lane];
+        }
+
         void HandleTouch()
         {
+            for (var i = 0; i < laneTouchHeld.Length; i++) laneTouchHeld[i] = false;
             if (!touchEnabled) return;
 
             if (Input.touchCount > 0)
@@ -712,18 +777,38 @@ namespace RhythmPlayer.Play
                 {
                     var touch = Input.GetTouch(i);
                     if (touch.phase == TouchPhase.Began) TryPadAtScreenPoint(touch.position);
+                    if (touch.phase != TouchPhase.Ended && touch.phase != TouchPhase.Canceled)
+                    {
+                        var held = PadAtScreenPoint(touch.position);
+                        if (held >= 0) laneTouchHeld[held] = true;
+                    }
                 }
             }
-            else if (Input.GetMouseButtonDown(0))
+            else
             {
-                TryPadAtScreenPoint(Input.mousePosition);
+                if (Input.GetMouseButtonDown(0)) TryPadAtScreenPoint(Input.mousePosition);
+                if (Input.GetMouseButton(0))
+                {
+                    var held = PadAtScreenPoint(Input.mousePosition);
+                    if (held >= 0) laneTouchHeld[held] = true;
+                }
             }
         }
 
         void TryPadAtScreenPoint(Vector2 screenPoint)
         {
+            var nearest = PadAtScreenPoint(screenPoint);
+            if (nearest < 0) return;
+
+            padFlashTimer[nearest] = 0.18f;
+            if (ready && !autoPlay && clock != null && clock.IsRunning) TryJudgeByInput(nearest);
+        }
+
+        /// <summary>屏幕坐标命中的判定点下标（-1 = 没命中）</summary>
+        int PadAtScreenPoint(Vector2 screenPoint)
+        {
             var cam = MainCamera;
-            if (cam == null) return;
+            if (cam == null) return -1;
 
             var world = cam.ScreenToWorldPoint(new Vector3(screenPoint.x, screenPoint.y, -cam.transform.position.z));
 
@@ -736,10 +821,7 @@ namespace RhythmPlayer.Play
                 nearest = i;
                 nearestDistance = distance;
             }
-            if (nearest < 0) return;
-
-            padFlashTimer[nearest] = 0.18f;
-            if (ready && !autoPlay && clock != null && clock.IsRunning) TryJudgeByInput(nearest);
+            return nearest;
         }
 
         NoteView CreateView()
