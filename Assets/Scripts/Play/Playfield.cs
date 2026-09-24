@@ -46,6 +46,7 @@ namespace RhythmPlayer.Play
         [SerializeField] Sprite tapSprite;           // 单点音符
         [SerializeField] Sprite tapBothSprite;       // 双押音符
         [SerializeField] Sprite holdHeadSprite;      // 长条头部
+        [SerializeField] Sprite holdBothSprite;      // 双押长条头部
         [SerializeField] Sprite holdBodySprite;      // 长条身体
         [SerializeField] Sprite holdTailSprite;      // 长条尾部
         [SerializeField] Sprite backgroundSprite;    // 默认背景（歌曲包没带背景时使用）
@@ -158,18 +159,7 @@ namespace RhythmPlayer.Play
                 return;
             }
 
-            string text;
-            try
-            {
-                text = File.ReadAllText(song.ChartPath);
-            }
-            catch (System.Exception e)
-            {
-                Debug.LogError($"[谱面] 读取失败：{e.Message}");
-                return;
-            }
-
-            chart = ChartParser.ParseText(text);
+            chart = ChartParser.LoadFile(song.ChartPath); // 文本谱面与 Malody（.mc）谱面都能装载
             foreach (var error in chart.Errors) Debug.LogWarning("[谱面] " + error);
             Debug.Log($"[谱面] {song.Name}：{chart.Notes.Count} 个音符，其中长条 {chart.HoldCount} 个");
 
@@ -410,7 +400,15 @@ namespace RhythmPlayer.Play
             view.Judged = false;
             view.Vanish = false;
 
-            SetSprite(view.Head, note.IsHold ? holdHeadSprite : (note.IsDouble ? tapBothSprite : tapSprite), new Color(0.78f, 0.92f, 1f));
+            if (note.IsHold)
+            {
+                // 长条：双押长条用橙色版本，普通长条用蓝色版本
+                SetSprite(view.Head, note.IsDouble ? (holdBothSprite != null ? holdBothSprite : holdHeadSprite) : holdHeadSprite, new Color(0.78f, 0.92f, 1f));
+            }
+            else
+            {
+                SetSprite(view.Head, note.IsDouble ? tapBothSprite : tapSprite, new Color(0.78f, 0.92f, 1f));
+            }
             view.Body.gameObject.SetActive(false);
             view.Tail.gameObject.SetActive(false);
             view.BothLine.gameObject.SetActive(false);

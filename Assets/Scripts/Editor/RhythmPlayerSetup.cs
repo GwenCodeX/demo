@@ -30,11 +30,12 @@ namespace RhythmPlayer.EditorTools
         {
             var list = new List<string>
             {
-                SkinFolder + "/tap.png",
-                SkinFolder + "/tapboth.png",
-                SkinFolder + "/hold-0.png",
+                SkinFolder + "/SIMPLETap.png",
+                SkinFolder + "/SIMPLETapboth.png",
+                SkinFolder + "/SIMPLEHold.png",
+                SkinFolder + "/SIMPLEholdboth.png",
+                SkinFolder + "/SIMPLEholdendSHOW.png",
                 SkinFolder + "/holdbody.png",
-                SkinFolder + "/holdend.png",
                 SkinFolder + "/lineout.png",
                 SkinFolder + "/both line.png",
                 SkinFolder + "/best.png",
@@ -97,8 +98,16 @@ namespace RhythmPlayer.EditorTools
                 return;
             }
 
+            // 根目录下的压缩包（.zip / .mcz）也要一起带过去
+            foreach (var file in Directory.GetFiles(SongsFolder))
+            {
+                if (file.EndsWith(".meta")) continue;
+                File.Copy(file, Path.Combine(targetRoot, Path.GetFileName(file)), true);
+            }
+
             foreach (var dir in Directory.GetDirectories(SongsFolder))
             {
+                if (Path.GetFileName(dir).StartsWith("_")) continue; // 跳过缓存目录
                 var target = Path.Combine(targetRoot, Path.GetFileName(dir));
                 Directory.CreateDirectory(target);
                 foreach (var file in Directory.GetFiles(dir))
@@ -138,11 +147,12 @@ namespace RhythmPlayer.EditorTools
             // 给面板挂上皮肤精灵与时钟引用
             var serialized = new SerializedObject(playfield);
             serialized.FindProperty("clock").objectReferenceValue = clock;
-            serialized.FindProperty("tapSprite").objectReferenceValue = LoadSprite(SkinFolder + "/tap.png");
-            serialized.FindProperty("tapBothSprite").objectReferenceValue = LoadSprite(SkinFolder + "/tapboth.png");
-            serialized.FindProperty("holdHeadSprite").objectReferenceValue = LoadSprite(SkinFolder + "/hold-0.png");
+            serialized.FindProperty("tapSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLETap.png");
+            serialized.FindProperty("tapBothSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLETapboth.png");
+            serialized.FindProperty("holdHeadSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEHold.png");
+            serialized.FindProperty("holdBothSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEholdboth.png");
             serialized.FindProperty("holdBodySprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdbody.png");
-            serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SkinFolder + "/holdend.png");
+            serialized.FindProperty("holdTailSprite").objectReferenceValue = LoadSprite(SkinFolder + "/SIMPLEholdendSHOW.png");
             serialized.FindProperty("hexFrameSprite").objectReferenceValue = LoadSprite(SkinFolder + "/lineout.png");
             serialized.FindProperty("bothLineSprite").objectReferenceValue = LoadSprite(SkinFolder + "/both line.png");
             serialized.FindProperty("bestSprite").objectReferenceValue = LoadSprite(SkinFolder + "/best.png");

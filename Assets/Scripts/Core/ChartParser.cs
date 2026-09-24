@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using UnityEngine;
 
 namespace RhythmPlayer.Core
@@ -66,6 +68,25 @@ namespace RhythmPlayer.Core
 
         /// <summary>从 TextAsset 解析（编辑器里直接引用资源时用）</summary>
         public static ChartData Parse(TextAsset asset) => asset == null ? null : ParseText(asset.text);
+
+        /// <summary>
+        /// 按扩展名从磁盘装载谱面：.mc 走 Malody 解析器，其余按文本谱面解析。
+        /// 读取失败时返回空谱面（并打错误日志），不会抛异常。
+        /// </summary>
+        public static ChartData LoadFile(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return new ChartData();
+            try
+            {
+                if (path.EndsWith(".mc", StringComparison.OrdinalIgnoreCase)) return MalodyChartParser.ParseFile(path);
+                return ParseText(File.ReadAllText(path));
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[谱面] 读取 {path} 失败：{e.Message}");
+                return new ChartData();
+            }
+        }
 
         /// <summary>从文本解析（运行时从磁盘读谱面时用）</summary>
         public static ChartData ParseText(string text)
