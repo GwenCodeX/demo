@@ -5,14 +5,15 @@ using RhythmPlayer.Core;
 namespace RhythmPlayer.Play
 {
     /// 六边形演奏面板：左列上中下 = 键 1/2/3，右列上中下 = 键 4/5/6。
-    /// 音符从六边形中心"冒出来"，沿判定点法线向外飞，到达边缘判定点的瞬间即拍点。
-    /// 皮肤精灵留空时退回纯色矩形。
+    /// 音符在中心附近的小六边形边界上"长出来"（由小变大），随后沿判定点法线
+    /// 向外飞到边缘判定点——到达判定点的瞬间即拍点。皮肤精灵留空时退回纯色矩形。
     public sealed class Playfield : MonoBehaviour
     {
         // 键位 1-6 → 六边形角度（度）：120°=左上, 180°=左中, 240°=左下, 60°=右上, 0°=右中, 300°=右下
         static readonly float[] PadAngleDeg = { 120f, 180f, 240f, 60f, 0f, 300f };
         const float Overshoot = 0.4f;      // 音符越过判定点后多远消失
         const float BothLineWindow = 0.9f; // 双押连线提前出现距离
+        const float BirthScaleFrom = 0.2f; // 浮现动画起始缩放
 
         [Header("引用")]
         [SerializeField] SongClock clock;
@@ -29,12 +30,18 @@ namespace RhythmPlayer.Play
         [SerializeField] Sprite bothLineSprite;
 
         [Header("六边形布局（世界单位）")]
-        [Tooltip("六边形中心到顶点的距离")]
+        [Tooltip("外六边形中心到顶点的距离")]
         [SerializeField] float hexRadius = 4.3f;
+        [Tooltip("中心出生区（小六边形）的判定点距离，音符从这里长出来")]
+        [SerializeField] float spawnRadius = 0.9f;
+        [Tooltip("显示中心出生区轮廓")]
+        [SerializeField] bool showSpawnZone = true;
 
         [Header("手感")]
-        [Tooltip("每拍飞行距离，越大越快（中心到判定点的飞行时间 = 判定点距离 / 本值 拍）")]
+        [Tooltip("每拍飞行距离，越大越快")]
         [SerializeField] float unitsPerBeat = 1.2f;
+        [Tooltip("出生动画时长（拍）")]
+        [SerializeField] float birthBeats = 0.8f;
 
         [Header("按键映射（左列上中下 1/2/3，右列上中下 4/5/6）")]
         [SerializeField] KeyCode[] judgeKeys = { KeyCode.E, KeyCode.D, KeyCode.C, KeyCode.I, KeyCode.K, KeyCode.Comma };
@@ -95,9 +102,11 @@ namespace RhythmPlayer.Play
             lastBeat = beat;
 
             var apothem = hexRadius * 0.866f;
+            var flightStart = apothem - spawnRadius;      // 出生区边界 → 判定点的飞行距离
+            var birthLength = birthBeats * unitsPerBeat;  // 出生动画对应的距离
 
-            // 音符到达中心点时才出现，之后一路向外飞
-            while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= apothem)
+            // 音符进入出生动画时才激活
+            while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= flightStart + birthLength)
             {
                 Activate(nextIndex);
                 nextIndex++;
@@ -112,15 +121,37 @@ namespace RhythmPlayer.Play
                 var rotation = Quaternion.Euler(0f, 0f, PadAngleDeg[lane]);
                 var noteWidth = 0.9f;
 
-                // 距离中心：0 = 中心（出生点），apothem = 判定点（打击位置）
-                var headDist = apothem - (float)(note.StartBeat - beat) * unitsPerBeat;
-                var tailDist = apothem - (float)(note.EndBeat - beat) * unitsPerBeat;
+                var ageHead = (float)(note.StartBeat - beat) * unitsPerBeat; // 头距判定点还有多远
+                var ageTail = (float)(note.EndBeat - beat) * unitsPerBeat;
+
+                float headDist;
+                float headScale;
+                float headAlpha;
+                if (ageHead > flightStart)
+                {
+                    // 出生期：停在出生区边界上，由小变大
+                    headDist = spawnRadius;
+                    var t = Mathf.Clamp01((flightStart + birthLength - ageHead) / birthLength);
+                    headScale = Mathf.Lerp(BirthScaleFrom, 1f, t * t * (3f - 2f * t));
+                    headAlpha = t;
+                }
+                else
+                {
+                    // 飞行期：从出生区边界飞向判定点，越过判定点后继续外飞一小段
+                    headDist = apothem - ageHead;
+                    headScale = 1f;
+                    headAlpha = 1f;
+                }
 
                 if (note.IsHold)
                 {
-                    headDist = Mathf.Min(headDist, apothem);  // 头到达判定点后钉住
-                    tailDist = Mathf.Min(tailDist, headDist); // 尾不越过头
-                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f);
+                    headDist = Mathf.Min(headDist, apothem); // 头到达判定点后钉住，等待被"消耗"
+
+                    var tailRaw = apothem - ageTail;
+                    var tailEmerged = tailRaw > spawnRadius;
+                    var tailDist = Mathf.Min(headDist, Mathf.Max(tailRaw, spawnRadius)); // 尾没长出来前贴在出生区边界
+
+                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
 
                     var bodyLength = headDist - tailDist;
                     if (bodyLength > 0.02f)
@@ -133,13 +164,22 @@ namespace RhythmPlayer.Play
                         view.Body.gameObject.SetActive(false);
                     }
 
-                    PlaceNote(view.Tail, radial * tailDist, rotation, noteWidth, 0.3f);
+                    if (tailEmerged)
+                    {
+                        view.Tail.gameObject.SetActive(true);
+                        PlaceNote(view.Tail, radial * tailDist, rotation, noteWidth, 0.3f, 1f, 1f);
+                    }
+                    else if (view.Tail.gameObject.activeSelf)
+                    {
+                        view.Tail.gameObject.SetActive(false);
+                    }
+
                     UpdateBothLine(view, apothem, headDist);
-                    if (tailDist > apothem + Overshoot) Release(i);
+                    if (tailRaw > apothem + Overshoot) Release(i);
                 }
                 else
                 {
-                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f);
+                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
                     UpdateBothLine(view, apothem, headDist);
                     if (headDist > apothem + Overshoot) Release(i);
                 }
@@ -165,20 +205,13 @@ namespace RhythmPlayer.Play
             view.Note = note;
 
             SetSprite(view.Head, note.IsHold ? holdHeadSprite : (note.IsDouble ? tapBothSprite : tapSprite), new Color(0.78f, 0.92f, 1f));
-
-            if (note.IsHold)
-            {
-                SetSprite(view.Body, holdBodySprite, new Color(0.45f, 0.68f, 1f, 0.5f));
-                SetSprite(view.Tail, holdTailSprite, new Color(0.78f, 0.92f, 1f));
-                view.Tail.gameObject.SetActive(true);
-            }
-            else
-            {
-                view.Body.gameObject.SetActive(false);
-                view.Tail.gameObject.SetActive(false);
-            }
-
+            view.Body.gameObject.SetActive(false);
+            view.Tail.gameObject.SetActive(false);
             view.BothLine.gameObject.SetActive(false);
+
+            if (note.IsHold) SetSprite(view.Body, holdBodySprite, new Color(0.45f, 0.68f, 1f, 0.5f));
+            if (note.IsHold) SetSprite(view.Tail, holdTailSprite, new Color(0.78f, 0.92f, 1f));
+
             active.Add(view);
         }
 
@@ -210,17 +243,22 @@ namespace RhythmPlayer.Play
             renderer.color = sprite != null ? Color.white : fallbackColor;
         }
 
-        void PlaceNote(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float fallbackHeight)
+        void PlaceNote(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float fallbackHeight, float scale, float alpha)
         {
             renderer.transform.localPosition = position;
             renderer.transform.localRotation = rotation;
+
+            Vector3 baseScale;
             if (renderer.sprite == SpriteFactory.Square())
             {
-                renderer.transform.localScale = new Vector3(width, fallbackHeight, 1f);
-                return;
+                baseScale = new Vector3(width, fallbackHeight, 1f);
             }
-            var scale = width / Mathf.Max(0.0001f, renderer.sprite.bounds.size.x);
-            renderer.transform.localScale = new Vector3(scale, scale, 1f);
+            else
+            {
+                baseScale = Vector3.one * (width / Mathf.Max(0.0001f, renderer.sprite.bounds.size.x));
+                renderer.color = new Color(1f, 1f, 1f, alpha);
+            }
+            renderer.transform.localScale = baseScale * scale;
         }
 
         void PlaceBody(SpriteRenderer renderer, Vector3 position, Quaternion rotation, float width, float length)
@@ -314,14 +352,25 @@ namespace RhythmPlayer.Play
                 background.transform.localScale = new Vector3(scale, scale, 1f);
             }
 
+            var hexApothem = hexRadius * 0.866f;
             if (hexFrameSprite != null)
             {
+                var size = hexFrameSprite.bounds.size;
+                var frameScale = hexRadius * 2f / Mathf.Max(0.0001f, Mathf.Max(size.x, size.y));
+
                 var frame = CreateQuad(transform, "HexFrame", -5, Color.white);
                 frame.sprite = hexFrameSprite;
-                var size = hexFrameSprite.bounds.size;
-                var scale = hexRadius * 2f / Mathf.Max(0.0001f, Mathf.Max(size.x, size.y));
                 frame.transform.localPosition = new Vector3(0f, 0f, 1f);
-                frame.transform.localScale = new Vector3(scale, scale, 1f);
+                frame.transform.localScale = new Vector3(frameScale, frameScale, 1f);
+
+                if (showSpawnZone)
+                {
+                    var zone = CreateQuad(transform, "SpawnZone", -4, new Color(0.6f, 0.9f, 1f, 0.22f));
+                    zone.sprite = hexFrameSprite;
+                    var zoneScale = frameScale * (spawnRadius / hexApothem);
+                    zone.transform.localPosition = new Vector3(0f, 0f, 0.5f);
+                    zone.transform.localScale = new Vector3(zoneScale, zoneScale, 1f);
+                }
             }
 
             for (var i = 0; i < padFlashes.Length; i++)
