@@ -4,29 +4,33 @@ using UnityEngine;
 
 namespace RhythmPlayer.Core
 {
-    /// 谱面音符：文本行格式 `{首位}{L/R}{角度}-{开始拍}[-{结束拍}]`
-    /// 经数据分析确认：首位 0 = 单点（无时长），1-6 = 长条（有起止）。
+    /// 谱面音符。支持两种文本格式：
+    /// 新格式（DCS 制谱器导出，如 C017.txt）：`{键位}-{开始拍}[-{结束拍}]`
+    ///   键位 1-6 = 六个键（对应角度扇区 1-6）；两位数如 24 = 双押（键 2+键 4 同时）。
+    /// 旧格式（如 E119.txt）：`{首位}{L/R}{角度}-{开始拍}[-{结束拍}]`
+    ///   首位 0 = 单点 / 1-6 = 长条，轨道暂按 角度/60 映射（语义未确认，可调）。
     public readonly struct ChartNote
     {
-        public readonly int Style;      // 首位数字：0 = 单点，1-6 = 长条（具体语义待确认，先原样保留）
-        public readonly char Side;      // L / R
-        public readonly int AngleDeg;   // 0 / 60 / ... / 360（每 60° 一档）
+        public readonly int Style;      // 旧格式首位数字；新格式恒 0
+        public readonly char Side;      // 旧格式 L/R；新格式 '-'
+        public readonly int AngleDeg;   // 旧格式角度；新格式恒 0
         public readonly double StartBeat;
         public readonly double EndBeat; // 单点时与 StartBeat 相同
+        public readonly int Lane;       // 0-5，六条轨道
+        public readonly bool IsDouble;  // 双押
 
-        public ChartNote(int style, char side, int angleDeg, double startBeat, double endBeat)
+        public ChartNote(int style, char side, int angleDeg, double startBeat, double endBeat, int lane, bool isDouble)
         {
             Style = style;
             Side = side;
             AngleDeg = angleDeg;
             StartBeat = startBeat;
             EndBeat = endBeat;
+            Lane = lane;
+            IsDouble = isDouble;
         }
 
         public bool IsHold => EndBeat > StartBeat;
-
-        /// 轨道 = 角度 / 60（0° 与 360° 同轨），共 6 轨。语义暂定，后续可换映射。
-        public int Lane => (AngleDeg / 60) % 6;
     }
 
     public sealed class ChartData
@@ -47,6 +51,8 @@ namespace RhythmPlayer.Core
 
     public static class ChartParser
     {
+        static readonly char[] Dash = { '-' };
+
         public static ChartData Parse(TextAsset asset) => asset == null ? null : ParseText(asset.text);
 
         public static ChartData ParseText(string text)
@@ -59,35 +65,61 @@ namespace RhythmPlayer.Core
             {
                 var line = lines[i].Trim();
                 if (line.Length == 0) continue;
-
-                var parts = line.Split('-');
-                if (parts.Length < 2 || parts[0].Length < 3)
-                {
-                    data.Errors.Add($"第 {i + 1} 行结构异常：{line}");
-                    continue;
-                }
-
-                var head = parts[0];
-                if (!int.TryParse(head.Substring(0, 1), out var style) ||
-                    !int.TryParse(head.Substring(2), out var angle) ||
-                    !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var start))
-                {
-                    data.Errors.Add($"第 {i + 1} 行数字格式错误：{line}");
-                    continue;
-                }
-
-                var end = start;
-                if (parts.Length >= 3 && !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out end))
-                {
-                    data.Errors.Add($"第 {i + 1} 行结束时间错误：{line}");
-                    continue;
-                }
-
-                data.Notes.Add(new ChartNote(style, head[1], angle, start, end));
+                if (!ParseLine(line, data)) data.Errors.Add($"第 {i + 1} 行无法解析：{line}");
             }
 
             data.Notes.Sort((a, b) => a.StartBeat.CompareTo(b.StartBeat));
             return data;
+        }
+
+        static bool ParseLine(string line, ChartData data)
+        {
+            var parts = line.Split(Dash);
+            if (parts.Length < 2 || parts[0].Length == 0) return false;
+            var head = parts[0];
+            if (head.Length <= 2 && IsAllDigits(head)) return ParseKeyLine(head, parts, data);
+            return ParseLegacyLine(head, parts, data);
+        }
+
+        /// 新格式：`{键位}-{开始拍}[-{结束拍}]`
+        static bool ParseKeyLine(string keys, string[] parts, ChartData data)
+        {
+            if (!double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var start)) return false;
+            var end = start;
+            if (parts.Length >= 3 && !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out end)) return false;
+
+            var isDouble = keys.Length == 2;
+            foreach (var c in keys)
+            {
+                var key = c - '0';
+                if (key < 1 || key > 6) return false;
+                data.Notes.Add(new ChartNote(0, '-', 0, start, end, key - 1, isDouble));
+            }
+            return true;
+        }
+
+        /// 旧格式：`{首位}{L/R}{角度}-{开始拍}[-{结束拍}]`
+        static bool ParseLegacyLine(string head, string[] parts, ChartData data)
+        {
+            if (head.Length < 3) return false;
+            if (!int.TryParse(head.Substring(0, 1), out var style) ||
+                !int.TryParse(head.Substring(2), out var angle) ||
+                !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var start)) return false;
+
+            var end = start;
+            if (parts.Length >= 3 && !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out end)) return false;
+
+            data.Notes.Add(new ChartNote(style, head[1], angle, start, end, angle / 60 % 6, false));
+            return true;
+        }
+
+        static bool IsAllDigits(string s)
+        {
+            foreach (var c in s)
+            {
+                if (c < '0' || c > '9') return false;
+            }
+            return true;
         }
     }
 }

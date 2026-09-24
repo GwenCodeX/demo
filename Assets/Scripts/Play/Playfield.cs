@@ -4,13 +4,22 @@ using RhythmPlayer.Core;
 
 namespace RhythmPlayer.Play
 {
-    /// 6 轨下落播放器：轨道 = 角度 / 60。音符位置完全由拍数决定（位置 = f(剩余拍数)），
+    /// 6 轨下落播放器：音符位置完全由拍数决定（位置 = f(剩余拍数)），
     /// 所以暂停、跳转、变速都不需要额外状态，天然和音乐同步。
+    /// 皮肤精灵留空时自动退回纯色矩形。
     public sealed class Playfield : MonoBehaviour
     {
         [Header("引用")]
         [SerializeField] SongClock clock;
         [SerializeField] TextAsset chartAsset;
+
+        [Header("皮肤（留空则纯色矩形）")]
+        [SerializeField] Sprite tapSprite;
+        [SerializeField] Sprite tapBothSprite;
+        [SerializeField] Sprite holdHeadSprite;
+        [SerializeField] Sprite holdBodySprite;
+        [SerializeField] Sprite holdTailSprite;
+        [SerializeField] Sprite backgroundSprite;
 
         [Header("布局（世界单位）")]
         [SerializeField] int laneCount = 6;
@@ -28,9 +37,9 @@ namespace RhythmPlayer.Play
         sealed class NoteView
         {
             public GameObject Root;
-            public Transform Head;
-            public Transform Body;
-            public Transform Tail;
+            public SpriteRenderer Head;
+            public SpriteRenderer Body;
+            public SpriteRenderer Tail;
             public ChartNote Note;
         }
 
@@ -81,17 +90,12 @@ namespace RhythmPlayer.Play
                 var tailY = judgeLineY + (float)(view.Note.EndBeat - beat) * unitsPerBeat;
                 var noteWidth = laneWidth * 0.9f;
 
-                view.Head.localPosition = new Vector3(0f, headY, 0f);
-                view.Head.localScale = new Vector3(noteWidth, 0.22f, 1f);
+                PlaceBar(view.Head, headY, noteWidth, 0.22f);
 
                 if (view.Note.IsHold)
                 {
-                    view.Body.gameObject.SetActive(true);
-                    view.Tail.gameObject.SetActive(true);
-                    view.Body.localPosition = new Vector3(0f, (headY + tailY) * 0.5f, 0f);
-                    view.Body.localScale = new Vector3(noteWidth * 0.55f, Mathf.Max(0.05f, tailY - headY), 1f);
-                    view.Tail.localPosition = new Vector3(0f, tailY, 0f);
-                    view.Tail.localScale = new Vector3(noteWidth, 0.22f, 1f);
+                    PlaceBody(view.Body, (headY + tailY) * 0.5f, noteWidth * 0.55f, Mathf.Max(0.05f, tailY - headY));
+                    PlaceBar(view.Tail, tailY, noteWidth, 0.22f);
                 }
 
                 if (tailY < judgeLineY - 3f) Release(i);
@@ -115,8 +119,22 @@ namespace RhythmPlayer.Play
             var view = pool.Count > 0 ? pool.Pop() : CreateView();
             view.Root.SetActive(true);
             view.Note = note;
-            view.Body.gameObject.SetActive(false);
-            view.Tail.gameObject.SetActive(false);
+
+            SetSprite(view.Head, note.IsHold ? holdHeadSprite : (note.IsDouble ? tapBothSprite : tapSprite), new Color(0.78f, 0.92f, 1f));
+
+            if (note.IsHold)
+            {
+                SetSprite(view.Body, holdBodySprite, new Color(0.45f, 0.68f, 1f, 0.5f));
+                SetSprite(view.Tail, holdTailSprite, new Color(0.78f, 0.92f, 1f));
+                view.Body.gameObject.SetActive(true);
+                view.Tail.gameObject.SetActive(true);
+            }
+            else
+            {
+                view.Body.gameObject.SetActive(false);
+                view.Tail.gameObject.SetActive(false);
+            }
+
             var lane = Mathf.Clamp(note.Lane, 0, laneCount - 1);
             view.Root.transform.localPosition = new Vector3(LaneCenterX(lane), 0f, 0f);
             active.Add(view);
@@ -137,10 +155,40 @@ namespace RhythmPlayer.Play
             return new NoteView
             {
                 Root = root,
-                Head = CreateQuad(root.transform, "Head", 11, new Color(0.78f, 0.92f, 1f)).transform,
-                Body = CreateQuad(root.transform, "Body", 10, new Color(0.45f, 0.68f, 1f, 0.5f)).transform,
-                Tail = CreateQuad(root.transform, "Tail", 11, new Color(0.78f, 0.92f, 1f)).transform,
+                Head = CreateQuad(root.transform, "Head", 11, new Color(0.78f, 0.92f, 1f)),
+                Body = CreateQuad(root.transform, "Body", 10, new Color(0.45f, 0.68f, 1f, 0.5f)),
+                Tail = CreateQuad(root.transform, "Tail", 11, new Color(0.78f, 0.92f, 1f)),
             };
+        }
+
+        void SetSprite(SpriteRenderer renderer, Sprite sprite, Color fallbackColor)
+        {
+            renderer.sprite = sprite != null ? sprite : SpriteFactory.Square();
+            renderer.color = sprite != null ? Color.white : fallbackColor;
+        }
+
+        void PlaceBar(SpriteRenderer renderer, float centerY, float width, float fallbackHeight)
+        {
+            renderer.transform.localPosition = new Vector3(0f, centerY, 0f);
+            if (renderer.sprite == SpriteFactory.Square())
+            {
+                renderer.transform.localScale = new Vector3(width, fallbackHeight, 1f);
+                return;
+            }
+            var scale = width / Mathf.Max(0.0001f, renderer.sprite.bounds.size.x);
+            renderer.transform.localScale = new Vector3(scale, scale, 1f);
+        }
+
+        void PlaceBody(SpriteRenderer renderer, float centerY, float width, float length)
+        {
+            renderer.transform.localPosition = new Vector3(0f, centerY, 0f);
+            if (renderer.sprite == SpriteFactory.Square())
+            {
+                renderer.transform.localScale = new Vector3(width, length, 1f);
+                return;
+            }
+            var size = renderer.sprite.bounds.size;
+            renderer.transform.localScale = new Vector3(width / Mathf.Max(0.0001f, size.x), length / Mathf.Max(0.0001f, size.y), 1f);
         }
 
         SpriteRenderer CreateQuad(Transform parent, string name, int sortingOrder, Color color)
@@ -158,6 +206,18 @@ namespace RhythmPlayer.Play
 
         void BuildVisuals()
         {
+            var fieldWidth = laneCount * laneWidth;
+
+            if (backgroundSprite != null)
+            {
+                var background = CreateQuad(transform, "Background", -10, new Color(0.62f, 0.62f, 0.72f));
+                background.sprite = backgroundSprite;
+                var size = backgroundSprite.bounds.size;
+                var scale = Mathf.Max(fieldWidth * 1.6f / size.x, viewHeight * 1.35f / size.y);
+                background.transform.localPosition = new Vector3(0f, judgeLineY + viewHeight * 0.5f, 1f);
+                background.transform.localScale = new Vector3(scale, scale, 1f);
+            }
+
             for (var i = 0; i <= laneCount; i++)
             {
                 var line = CreateQuad(transform, "LaneLine", 0, new Color(1f, 1f, 1f, 0.08f));
@@ -168,7 +228,7 @@ namespace RhythmPlayer.Play
 
             var judge = CreateQuad(transform, "JudgeLine", 5, new Color(1f, 1f, 1f, 0.85f));
             judge.transform.localPosition = new Vector3(0f, judgeLineY, 0f);
-            judge.transform.localScale = new Vector3(laneCount * laneWidth, 0.06f, 1f);
+            judge.transform.localScale = new Vector3(fieldWidth, 0.06f, 1f);
         }
     }
 }
