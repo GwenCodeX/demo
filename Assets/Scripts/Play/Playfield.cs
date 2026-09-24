@@ -32,13 +32,13 @@ namespace RhythmPlayer.Play
         const float PopupLife = 0.45f;          // 判定字存活时长（秒）
         const float EffectWidth = 1.7f;         // 特效/判定字的基准宽度（世界单位）
         const int ComboShowFrom = 4;            // 连击 ≥ 该值才显示数字
-        const float ComboDigitHeight = 0.85f;   // 连击数字高度（世界单位，比之前的大字小很多）
-        const float ComboDigitGap = 0.06f;      // 连击数字间距
+        const float ComboDigitHeight = 0.6f;    // 连击数字高度（世界单位，比之前的大字小很多）
+        const float ComboDigitGap = 0.05f;      // 连击数字间距
         const float ComboDigitAlpha = 0.7f;     // 连击数字透明度（半透明但看得清）
         const float ComboTagAlpha = 0.85f;      // 连击标记透明度
-        const float ComboTagWidth = 1.15f;      // 连击标记宽度
-        const float ComboCenterY = -0.15f;      // 数字组的纵向位置（六边形中心略偏下）
-        const float ComboTagY = 0.72f;          // 连击标记的纵向位置（数字上方）
+        const float ComboTagWidth = 0.85f;      // 连击标记宽度
+        const float ComboCenterY = -0.12f;      // 数字组的纵向位置（六边形中心略偏下）
+        const float ComboTagY = 0.55f;          // 连击标记的纵向位置（数字上方）
         const int ComboMaxDigits = 5;           // 连击数字最多显示位数
 
         // 判定等级
