@@ -38,7 +38,7 @@ namespace RhythmPlayer.Play
         const string VolumeKey = "RhythmPlayer.Volume";
         const string SpeedKey = "RhythmPlayer.Speed";
         const string FpsKey = "RhythmPlayer.FpsIndex";
-        const string PerfKey = "RhythmPlayer.PerformanceMode";
+        const string AutoPlayKey = "RhythmPlayer.AutoPlay";
         const string KeyPrefix = "RhythmPlayer.Key";
 
         static readonly int[] FpsPresets = { 60, 90, 120, 144, 165, 240, 300 };
@@ -61,7 +61,7 @@ namespace RhythmPlayer.Play
         float volume = 1f;
         float noteSpeed = 2.4f;
         int fpsIndex = FpsPresets.Length - 1;
-        bool performanceMode = true;
+        bool autoPlayEnabled = true;
         int rebindLane = -1;
         float resultTimer;
         float maxDriftMs;
@@ -106,10 +106,11 @@ namespace RhythmPlayer.Play
             volume = PlayerPrefs.GetFloat(VolumeKey, 1f);
             noteSpeed = PlayerPrefs.GetFloat(SpeedKey, playfield != null ? playfield.NoteSpeed : 2.4f);
             fpsIndex = Mathf.Clamp(PlayerPrefs.GetInt(FpsKey, FpsPresets.Length - 1), 0, FpsPresets.Length - 1);
-            performanceMode = PlayerPrefs.GetInt(PerfKey, 1) != 0;
+            autoPlayEnabled = PlayerPrefs.GetInt(AutoPlayKey, 1) != 0;
             LoadKeyBindings();
 
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
+            ApplyQualityDefaults();
             ApplySettings();
 
             StartCoroutine(StartupRoutine());
@@ -137,9 +138,12 @@ namespace RhythmPlayer.Play
         void ApplySettings()
         {
             AudioListener.volume = Mathf.Clamp01(volume);
-            if (playfield != null) playfield.SetNoteSpeed(noteSpeed);
+            if (playfield != null)
+            {
+                playfield.SetNoteSpeed(noteSpeed);
+                playfield.SetAutoPlay(autoPlayEnabled);
+            }
             ApplyFrameRate();
-            ApplyPerformanceMode();
         }
 
         void ApplyFrameRate()
@@ -148,24 +152,13 @@ namespace RhythmPlayer.Play
             Application.targetFrameRate = FpsPresets[fpsIndex];
         }
 
-        void ApplyPerformanceMode()
+        void ApplyQualityDefaults()
         {
-            if (performanceMode)
-            {
-                QualitySettings.shadows = ShadowQuality.Disable;
-                QualitySettings.antiAliasing = 0;
-                QualitySettings.pixelLightCount = 0;
-                QualitySettings.particleRaycastBudget = 0;
-                QualitySettings.softParticles = false;
-            }
-            else
-            {
-                QualitySettings.shadows = ShadowQuality.HardOnly;
-                QualitySettings.antiAliasing = 2;
-                QualitySettings.pixelLightCount = 4;
-                QualitySettings.particleRaycastBudget = 256;
-                QualitySettings.softParticles = true;
-            }
+            QualitySettings.shadows = ShadowQuality.Disable;
+            QualitySettings.antiAliasing = 0;
+            QualitySettings.pixelLightCount = 0;
+            QualitySettings.particleRaycastBudget = 0;
+            QualitySettings.softParticles = false;
         }
 
         void SaveSettings()
@@ -173,7 +166,7 @@ namespace RhythmPlayer.Play
             PlayerPrefs.SetFloat(VolumeKey, volume);
             PlayerPrefs.SetFloat(SpeedKey, noteSpeed);
             PlayerPrefs.SetInt(FpsKey, fpsIndex);
-            PlayerPrefs.SetInt(PerfKey, performanceMode ? 1 : 0);
+            PlayerPrefs.SetInt(AutoPlayKey, autoPlayEnabled ? 1 : 0);
             PlayerPrefs.Save();
         }
 
@@ -198,10 +191,10 @@ namespace RhythmPlayer.Play
             SaveSettings();
         }
 
-        void TogglePerformanceMode()
+        void ToggleAutoPlay()
         {
-            performanceMode = !performanceMode;
-            ApplyPerformanceMode();
+            autoPlayEnabled = !autoPlayEnabled;
+            if (playfield != null) playfield.SetAutoPlay(autoPlayEnabled);
             SaveSettings();
         }
 
@@ -349,6 +342,7 @@ namespace RhythmPlayer.Play
                 case State.Playing:
                     TrackDrift();
                     if (Input.GetKeyDown(KeyCode.Space)) { PauseGame(); break; }
+                    if (Input.GetKeyDown(KeyCode.Tab)) { ToggleAutoPlay(); break; }
                     if (Input.GetKeyDown(KeyCode.R)) { RestartSong(); break; }
                     if (Input.GetKeyDown(KeyCode.Escape)) { PauseGame(); break; }
                     if (clock != null && clock.IsFinished) ShowResult();
@@ -437,6 +431,7 @@ namespace RhythmPlayer.Play
                 }
                 else
                 {
+                    playfield.SetAutoPlay(autoPlayEnabled);
                     clock.PlayFrom(0.0);
                     state = State.Playing;
                 }
@@ -497,6 +492,8 @@ namespace RhythmPlayer.Play
 
         void OnGUI()
         {
+            UiTheme.BeginGui();
+
             switch (state)
             {
                 case State.Result:
@@ -536,15 +533,15 @@ namespace RhythmPlayer.Play
             hintStyle ??= UiTheme.HintStyle();
             menuButtonStyle ??= UiTheme.MenuButtonStyle();
 
-            GUI.Label(new Rect(0f, Screen.height * 0.15f, Screen.width, 66f), "RHYTHM PLAYER", titleStyle);
-            GUI.Label(new Rect(0f, Screen.height * 0.15f + 64f, Screen.width, 28f), "六边形音游播放器", hintStyle);
-            GUI.DrawTexture(new Rect(Screen.width * 0.5f - 180f, Screen.height * 0.15f + 106f, 360f, 2f), UiTheme.AccentLine());
+            GUI.Label(new Rect(0f, UiTheme.Height * 0.15f, UiTheme.Width, 66f), "RHYTHM PLAYER", titleStyle);
+            GUI.Label(new Rect(0f, UiTheme.Height * 0.15f + 64f, UiTheme.Width, 28f), "六边形音游播放器", hintStyle);
+            GUI.DrawTexture(new Rect(UiTheme.Width * 0.5f - 180f, UiTheme.Height * 0.15f + 106f, 360f, 2f), UiTheme.AccentLine());
 
             const float buttonWidth = 420f;
             const float buttonHeight = 84f;
             const float buttonGap = 22f;
-            var left = (Screen.width - buttonWidth) * 0.5f;
-            var top = Screen.height * 0.37f;
+            var left = (UiTheme.Width - buttonWidth) * 0.5f;
+            var top = UiTheme.Height * 0.37f;
 
             if (GUI.Button(new Rect(left, top, buttonWidth, buttonHeight), $"游玩    （{songs.Count} 首）", menuButtonStyle)) EnterSongSelect();
             if (GUI.Button(new Rect(left, top + (buttonHeight + buttonGap), buttonWidth, buttonHeight), "导入歌曲", menuButtonStyle))
@@ -558,7 +555,7 @@ namespace RhythmPlayer.Play
                 state = State.Settings;
             }
 
-            GUI.Label(new Rect(0f, Screen.height - 58f, Screen.width, 24f),
+            GUI.Label(new Rect(0f, UiTheme.Height - 58f, UiTheme.Width, 24f),
                 IsTouchPlatform ? "点按即可进入" : "鼠标 / 触摸点击    ·    游玩中左上角可暂停", hintStyle);
         }
 
@@ -588,7 +585,7 @@ namespace RhythmPlayer.Play
                 normal = { textColor = UiTheme.TextDim },
             };
 
-            var panel = new Rect((Screen.width - 940f) * 0.5f, (Screen.height - 480f) * 0.5f, 940f, 480f);
+            var panel = new Rect((UiTheme.Width - 940f) * 0.5f, (UiTheme.Height - 480f) * 0.5f, 940f, 480f);
             GUI.Box(panel, GUIContent.none, resultPanelStyle);
             GUI.Label(new Rect(panel.x, panel.y + 26f, panel.width, 44f), "导入歌曲", menuTitleStyle);
 
@@ -643,10 +640,10 @@ namespace RhythmPlayer.Play
             };
 
             GUI.color = new Color(0f, 0f, 0f, 0.55f);
-            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(0f, 0f, UiTheme.Width, UiTheme.Height), Texture2D.whiteTexture);
             GUI.color = Color.white;
 
-            var panel = new Rect((Screen.width - 440f) * 0.5f, (Screen.height - 560f) * 0.5f, 440f, 560f);
+            var panel = new Rect((UiTheme.Width - 440f) * 0.5f, (UiTheme.Height - 560f) * 0.5f, 440f, 560f);
             GUI.Box(panel, GUIContent.none, resultPanelStyle);
             GUI.Label(new Rect(panel.x, panel.y + 34f, panel.width, 44f), "已暂停", menuTitleStyle);
 
@@ -703,8 +700,8 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            var panelHeight = Mathf.Min(Screen.height - 20f, 700f);
-            var panel = new Rect((Screen.width - 760f) * 0.5f, (Screen.height - panelHeight) * 0.5f, 760f, panelHeight);
+            var panelHeight = Mathf.Min(UiTheme.Height - 20f, 700f);
+            var panel = new Rect((UiTheme.Width - 760f) * 0.5f, (UiTheme.Height - panelHeight) * 0.5f, 760f, panelHeight);
             GUI.Box(panel, GUIContent.none, resultPanelStyle);
             GUI.Label(new Rect(panel.x, panel.y + 14f, panel.width, 44f), "设置", menuTitleStyle);
 
@@ -730,8 +727,8 @@ namespace RhythmPlayer.Play
             if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustFps(1);
 
             rowY += 60f;
-            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "性能模式", settingsLabelStyle);
-            if (GUI.Button(new Rect(left + 240f, rowY, 314f, 50f), performanceMode ? "开（低占用，更流畅）" : "关（默认画质）", menuButtonStyle)) TogglePerformanceMode();
+            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "自动演示", settingsLabelStyle);
+            if (GUI.Button(new Rect(left + 240f, rowY, 314f, 50f), autoPlayEnabled ? "开（谱面自动演奏）" : "关（手动游玩）", menuButtonStyle)) ToggleAutoPlay();
 
             rowY += 68f;
             GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), "—— 按键映射（点后按新键，Esc 取消）——", hintStyle);
@@ -823,12 +820,12 @@ namespace RhythmPlayer.Play
             var selectHint = IsTouchPlatform
                 ? "点按曲目试听    ·    「开始」游玩    ·    Esc 返回"
                 : "点按曲目试听    ·    Enter 开始    ·    数字键选曲    ·    Esc 返回";
-            GUI.Label(new Rect(40f, Screen.height - 56f, Screen.width - 80f, 24f), selectHint, hintStyle);
+            GUI.Label(new Rect(40f, UiTheme.Height - 56f, UiTheme.Width - 80f, 24f), selectHint, hintStyle);
 
             if (!string.IsNullOrEmpty(loadingText))
             {
                 var dots = new string('.', 1 + (int)(Time.unscaledTime * 3f) % 3);
-                GUI.Box(new Rect((Screen.width - 520f) * 0.5f, Screen.height - 200f, 520f, 64f), loadingText + dots, loadingStyle);
+                GUI.Box(new Rect((UiTheme.Width - 520f) * 0.5f, UiTheme.Height - 200f, 520f, 64f), loadingText + dots, loadingStyle);
             }
         }
 
@@ -840,7 +837,7 @@ namespace RhythmPlayer.Play
             GUI.color = new Color(1f, 1f, 1f, ease);
             GUI.matrix = Matrix4x4.Translate(new Vector3(0f, (1f - ease) * 46f, 0f));
 
-            var leftPanel = new Rect(70f, Screen.height * 0.28f, 620f, 340f);
+            var leftPanel = new Rect(70f, UiTheme.Height * 0.28f, 620f, 340f);
             GUI.Box(leftPanel, GUIContent.none, resultPanelStyle);
 
             if (songs.Count > 0 && selectedIndex >= 0 && selectedIndex < songs.Count)
@@ -884,7 +881,7 @@ namespace RhythmPlayer.Play
             const float rowStagger = 0.09f;
             const float rowDuration = 0.5f;
             const float listTop = 100f;
-            var menuX = Screen.width - menuWidth - 24f;
+            var menuX = UiTheme.Width - menuWidth - 24f;
 
             var headerEase = 1f - Mathf.Pow(1f - Mathf.Clamp01(menuTimer / 0.4f), 3f);
             var previousColor = GUI.color;
@@ -957,7 +954,7 @@ namespace RhythmPlayer.Play
             };
             hintStyle ??= UiTheme.HintStyle();
 
-            var panelRect = new Rect((Screen.width - 640f) * 0.5f, (Screen.height - 520f) * 0.5f, 640f, 520f);
+            var panelRect = new Rect((UiTheme.Width - 640f) * 0.5f, (UiTheme.Height - 520f) * 0.5f, 640f, 520f);
             GUI.Box(panelRect, GUIContent.none, resultPanelStyle);
 
             GUI.Label(new Rect(panelRect.x, panelRect.y + 26f, panelRect.width, 36f), "结算 · " + result.SongName, resultTitleStyle);

@@ -48,12 +48,30 @@ namespace RhythmPlayer.UI
         /// <summary>强调线（上亮下透明的小渐变）</summary>
         public static Texture2D AccentLine() => accentLine ??= VerticalGradient(Accent, new Color(Accent.r, Accent.g, Accent.b, 0f), 16);
 
+        static float guiScale = 1f;
+
+        /// <summary>设计空间宽度（= 屏幕宽度 ÷ 全局缩放），所有界面坐标都基于它换算</summary>
+        public static float Width => Screen.width / guiScale;
+
+        /// <summary>设计空间高度（= 屏幕高度 ÷ 全局缩放）</summary>
+        public static float Height => Screen.height / guiScale;
+
+        /// <summary>
+        /// 在每个 OnGUI 开头调用：按屏幕分辨率整体缩放界面（设计基准 1280×720），
+        /// 这样手机高分辨率屏上按钮和字都会等比放大，桌面端窗口大小变化也不跑版。
+        /// </summary>
+        public static void BeginGui()
+        {
+            guiScale = Mathf.Max(1f, Mathf.Min(Screen.width / 1280f, Screen.height / 720f));
+            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(guiScale, guiScale, 1f));
+        }
+
         /// <summary>画整屏背景：渐变 + 平铺网格</summary>
         public static void DrawBackdrop()
         {
-            GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Background(), ScaleMode.StretchToFill);
-            GUI.DrawTextureWithTexCoords(new Rect(0f, 0f, Screen.width, Screen.height), Grid(),
-                new Rect(0f, 0f, Screen.width / 64f, Screen.height / 64f));
+            GUI.DrawTexture(new Rect(0f, 0f, Width, Height), Background(), ScaleMode.StretchToFill);
+            GUI.DrawTextureWithTexCoords(new Rect(0f, 0f, Width, Height), Grid(),
+                new Rect(0f, 0f, Width / 64f, Height / 64f));
         }
 
         // ===== 样式工厂（需在 OnGUI 里调用） =====

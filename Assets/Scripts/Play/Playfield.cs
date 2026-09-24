@@ -144,6 +144,13 @@ namespace RhythmPlayer.Play
         {
             if (clock == null) clock = FindObjectOfType<SongClock>();
             mainCamera = Camera.main;
+
+            // 手机端把镜头拉近，游玩区域占屏更大
+            if (mainCamera != null && (Application.platform == RuntimePlatform.Android || Application.platform == RuntimePlatform.IPhonePlayer))
+            {
+                mainCamera.orthographicSize = 5.0f;
+            }
+
             BuildVisuals();
 
             sfxSource = gameObject.AddComponent<AudioSource>();
@@ -260,7 +267,7 @@ namespace RhythmPlayer.Play
 
             var cam = MainCamera;
             var viewHeight = cam != null && cam.orthographic ? cam.orthographicSize * 2f : 11.6f;
-            var viewWidth = viewHeight * Screen.width / Mathf.Max(1, Screen.height);
+            var viewWidth = viewHeight * UiTheme.Width / Mathf.Max(1, UiTheme.Height);
             var size = sprite.bounds.size;
             var scale = Mathf.Max(viewWidth / Mathf.Max(0.0001f, size.x), viewHeight / Mathf.Max(0.0001f, size.y)) * 1.02f;
             backgroundRenderer.transform.localScale = new Vector3(scale, scale, 1f);
@@ -693,12 +700,6 @@ namespace RhythmPlayer.Play
             }
 
             HandleTouch();
-
-            if (Input.GetKeyDown(KeyCode.Tab))
-            {
-                autoPlay = !autoPlay;
-                Debug.Log(autoPlay ? "[模式] 自动演示" : "[模式] 手动游玩");
-            }
         }
 
         void HandleTouch()
@@ -838,7 +839,7 @@ namespace RhythmPlayer.Play
         {
             var cam = MainCamera;
             var viewHeight = cam != null && cam.orthographic ? cam.orthographicSize * 2f : 11.6f;
-            var viewWidth = viewHeight * Screen.width / Mathf.Max(1, Screen.height);
+            var viewWidth = viewHeight * UiTheme.Width / Mathf.Max(1, UiTheme.Height);
 
             if (backgroundSprite != null)
             {
@@ -898,6 +899,7 @@ namespace RhythmPlayer.Play
 
         void OnGUI()
         {
+            UiTheme.BeginGui();
             if (!ready) return;
 
             percentStyle ??= new GUIStyle(GUI.skin.label)
@@ -914,7 +916,7 @@ namespace RhythmPlayer.Play
                 lastAccuracy = accuracy;
                 percentText = (accuracy * 100f).ToString("0.00") + "%";
             }
-            GUI.Label(new Rect(Screen.width - 340f, 16f, 320f, 40f), percentText, percentStyle);
+            GUI.Label(new Rect(UiTheme.Width - 340f, 16f, 320f, 40f), percentText, percentStyle);
         }
     }
 }
