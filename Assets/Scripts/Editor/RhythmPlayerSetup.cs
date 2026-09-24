@@ -73,6 +73,13 @@ namespace RhythmPlayer.EditorTools
 
             var output = Path.GetFullPath("Build/RhythmDemo.exe");
             Directory.CreateDirectory(Path.GetDirectoryName(output));
+
+            // 若当前激活目标是安卓，先切回 Windows，保证两条打包管线可以交替执行
+            if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.StandaloneWindows64)
+            {
+                EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Standalone, BuildTarget.StandaloneWindows64);
+            }
+
             var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
             {
                 scenes = new[] { DemoScenePath },
@@ -94,6 +101,20 @@ namespace RhythmPlayer.EditorTools
         /// </summary>
         public static void BuildAndroid()
         {
+            // 0. 配置安卓工具链路径（仅在本机目录存在时生效；编辑器会记住这些路径）
+            //    键名与编辑器实际读取的一致：AndroidSdkRoot / AndroidNdkRootR23B / Jdk17Path / JdkUseEmbedded
+            const string sdkPath = "D:/AndroidSDK";
+            const string ndkPath = "D:/AndroidNDK/android-ndk-r23b";
+            const string jdkPath = "D:/AndroidJDK17";
+            if (Directory.Exists(sdkPath)) EditorPrefs.SetString("AndroidSdkRoot", sdkPath);
+            if (Directory.Exists(ndkPath)) EditorPrefs.SetString("AndroidNdkRootR23B", ndkPath);
+            if (Directory.Exists(jdkPath))
+            {
+                EditorPrefs.SetString("Jdk17Path", jdkPath);
+                EditorPrefs.SetBool("JdkUseEmbedded", false);
+            }
+            Debug.Log($"[BuildAndroid] 工具链配置：SDK={EditorPrefs.GetString("AndroidSdkRoot", "(未设置)")}  NDK={EditorPrefs.GetString("AndroidNdkRootR23B", "(未设置)")}  JDK={EditorPrefs.GetString("Jdk17Path", "(未设置)")}");
+
             // 1. 同步歌包 + 清单到 StreamingAssets
             SyncStreamingSongs();
 
@@ -105,12 +126,12 @@ namespace RhythmPlayer.EditorTools
                 return;
             }
 
-            // 3. 安卓玩家设置：横屏、包名、Mono 后端（构建快，方便测试）
+            // 3. 安卓玩家设置：横屏、包名、Mono 后端（构建快，方便测试；Mono 只支持 ARMv7）
             PlayerSettings.productName = "RhythmPlayer";
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
             PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.gwencodex.rhythmplayer");
             PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.Mono2x);
-            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARMv7 | AndroidArchitecture.ARM64;
+            PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARMv7;
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel24;
 
             // 4. 搭建场景并打包

@@ -402,7 +402,7 @@ namespace RhythmPlayer.Play
             var song = songs[index];
             state = State.Loading;
             previewActive = false;
-            loadingText = preview ? $"载入试听「{song.Name}」" : $"正在加载「{song.Name}」";
+            loadingText = preview ? "" : $"正在加载「{song.Name}」"; // 试听加载不打扰，只有正式游玩才提示
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
 

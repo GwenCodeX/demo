@@ -21,13 +21,13 @@ namespace RhythmPlayer.Play
         const float PopupLife = 0.45f;
         const float EffectWidth = 1.7f;
         const int ComboShowFrom = 4;
-        const float ComboDigitHeight = 0.6f;
-        const float ComboDigitGap = 0.05f;
+        const float ComboDigitHeight = 0.45f;
+        const float ComboDigitGap = 0.04f;
         const float ComboDigitAlpha = 0.7f;
         const float ComboTagAlpha = 0.85f;
-        const float ComboTagWidth = 0.85f;
-        const float ComboCenterY = -0.12f;
-        const float ComboTagY = 0.55f;
+        const float ComboTagWidth = 0.65f;
+        const float ComboCenterY = -0.1f;
+        const float ComboTagY = 0.42f;
         const int ComboMaxDigits = 5;
 
         const int GradeBest = 0;
@@ -77,7 +77,6 @@ namespace RhythmPlayer.Play
 
         [Header("按键映射（左列上中下 1/2/3，右列上中下 4/5/6）")]
         [SerializeField] KeyCode[] judgeKeys = { KeyCode.E, KeyCode.D, KeyCode.C, KeyCode.I, KeyCode.K, KeyCode.Comma };
-        [SerializeField] bool showPadLabels = true;
 
         [Header("触摸输入")]
         [SerializeField] bool touchEnabled = true;
@@ -126,13 +125,11 @@ namespace RhythmPlayer.Play
         AudioSource sfxSource;
         Camera mainCamera;
 
-        string[] padLabelTexts;
         string percentText = "0.00%";
         string comboTextCache = "0";
         int lastComboShown = -1;
         float lastAccuracy = -1f;
 
-        GUIStyle labelStyle;
         GUIStyle percentStyle;
 
         int bestCount;
@@ -148,7 +145,6 @@ namespace RhythmPlayer.Play
             if (clock == null) clock = FindObjectOfType<SongClock>();
             mainCamera = Camera.main;
             BuildVisuals();
-            BuildPadLabels();
 
             sfxSource = gameObject.AddComponent<AudioSource>();
             sfxSource.playOnAwake = false;
@@ -242,7 +238,6 @@ namespace RhythmPlayer.Play
         {
             if (judgeKeys == null || lane < 0 || lane >= judgeKeys.Length) return;
             judgeKeys[lane] = key;
-            BuildPadLabels();
         }
 
         void RefreshBackground(string path)
@@ -901,23 +896,10 @@ namespace RhythmPlayer.Play
             comboTag.gameObject.SetActive(false);
         }
 
-        void BuildPadLabels()
-        {
-            padLabelTexts = new string[6];
-            var showKeys = Application.platform != RuntimePlatform.Android;
-            for (var i = 0; i < 6; i++)
-            {
-                padLabelTexts[i] = showKeys ? $"{i + 1} ({KeyLabel(i)})" : (i + 1).ToString();
-            }
-        }
-
         void OnGUI()
         {
             if (!ready) return;
-            var cam = MainCamera;
-            if (cam == null) return;
 
-            labelStyle ??= UiTheme.PadLabelStyle();
             percentStyle ??= new GUIStyle(GUI.skin.label)
             {
                 fontSize = 30,
@@ -926,16 +908,6 @@ namespace RhythmPlayer.Play
                 normal = { textColor = new Color(0.92f, 0.97f, 1f, 0.92f) },
             };
 
-            if (showPadLabels && padLabelTexts != null)
-            {
-                for (var i = 0; i < 6; i++)
-                {
-                    var padScreen = cam.WorldToScreenPoint(PadPosition(i) * 0.82f);
-                    if (padScreen.z <= 0f) continue;
-                    GUI.Label(new Rect(padScreen.x - 45f, Screen.height - padScreen.y - 12f, 90f, 24f), padLabelTexts[i], labelStyle);
-                }
-            }
-
             var accuracy = Accuracy;
             if (!Mathf.Approximately(accuracy, lastAccuracy))
             {
@@ -943,18 +915,6 @@ namespace RhythmPlayer.Play
                 percentText = (accuracy * 100f).ToString("0.00") + "%";
             }
             GUI.Label(new Rect(Screen.width - 340f, 16f, 320f, 40f), percentText, percentStyle);
-        }
-
-        string KeyLabel(int index)
-        {
-            var key = GetJudgeKey(index);
-            if (key == KeyCode.None) return "-";
-            if (key == KeyCode.Comma) return ",";
-            if (key == KeyCode.Period) return ".";
-            if (key == KeyCode.Semicolon) return ";";
-            if (key == KeyCode.Slash) return "/";
-            if (key == KeyCode.Quote) return "'";
-            return key.ToString();
         }
     }
 }
