@@ -3,10 +3,14 @@ using UnityEngine;
 namespace RhythmPlayer.Core
 {
     /// 音游时钟：以 AudioSettings.dspTime 为唯一时间基准，与音频硬件采样对齐，不受帧率影响。
-    /// 歌曲时间 0 秒 = 音频第 0 采样；拍数 = (歌曲时间 - offset) / 每拍秒数。
+    /// 注意：dspTime 是按音频缓冲"跳着"更新的（约几毫秒一步），逐帧直接读取会让画面一顿一顿；
+    /// 所以这里用帧时钟逐帧推进、再缓慢向 dspTime 回正的方式输出平滑时间。
     [RequireComponent(typeof(AudioSource))]
     public sealed class SongClock : MonoBehaviour
     {
+        const double SnapThreshold = 0.08;   // 与真实音频偏差超过该值（跳转等）直接对齐
+        const double CorrectionRate = 10.0;  // 平时每秒向真实音频收敛的速率
+
         [Header("歌曲参数")]
         [SerializeField] AudioSource source;
         [Tooltip("BPM（来自 musicInfo.json）")]
@@ -16,6 +20,7 @@ namespace RhythmPlayer.Core
 
         double anchorDsp;
         double pauseTime;
+        double smoothingTime;
         bool started;
         bool running;
 
@@ -24,8 +29,8 @@ namespace RhythmPlayer.Core
         public float Bpm => bpm;
         public float SecondsPerBeat => 60f / bpm;
 
-        /// 当前歌曲时间（秒）
-        public double SongTime => running ? AudioSettings.dspTime - anchorDsp : pauseTime;
+        /// 当前歌曲时间（秒，已平滑，逐帧连续）
+        public double SongTime => running ? smoothingTime : pauseTime;
 
         /// AudioSource 自身报告的播放位置，用于校验时钟偏差
         public double SourceTime => source != null && source.clip != null ? source.time : 0.0;
@@ -38,12 +43,29 @@ namespace RhythmPlayer.Core
         public double BeatToSeconds(double beat) => firstBeatOffsetSeconds + beat * SecondsPerBeat;
         public double SecondsToBeat(double seconds) => (seconds - firstBeatOffsetSeconds) / SecondsPerBeat;
 
-        /// 把歌曲时间换算为 dspTime（用于 PlayScheduled 前瞻调度）
+        /// 把歌曲时间换算为 dspTime（用于 PlayScheduled 前瞻调度，保持采样级精度）
         public double DspTimeAt(double songSeconds) => anchorDsp + songSeconds;
 
         void Awake()
         {
             if (source == null) source = GetComponent<AudioSource>();
+        }
+
+        void Update()
+        {
+            if (!running)
+            {
+                smoothingTime = pauseTime;
+                return;
+            }
+
+            var raw = AudioSettings.dspTime - anchorDsp;
+            var delta = Time.unscaledDeltaTime;
+            smoothingTime += delta;
+            var error = raw - smoothingTime;
+            smoothingTime = System.Math.Abs(error) > SnapThreshold
+                ? raw
+                : smoothingTime + error * System.Math.Min(1.0, delta * CorrectionRate);
         }
 
         public void PlayFrom(double songSeconds = 0.0)
@@ -56,6 +78,7 @@ namespace RhythmPlayer.Core
             source.PlayScheduled(startDsp);
             anchorDsp = startDsp - t;
             pauseTime = t;
+            smoothingTime = AudioSettings.dspTime - anchorDsp;
             started = true;
             running = true;
         }
@@ -73,6 +96,7 @@ namespace RhythmPlayer.Core
             if (running || !started) return;
             source.UnPause();
             anchorDsp = AudioSettings.dspTime - pauseTime;
+            smoothingTime = AudioSettings.dspTime - anchorDsp;
             running = true;
         }
 
@@ -89,7 +113,11 @@ namespace RhythmPlayer.Core
             var t = Mathf.Clamp((float)songSeconds, 0f, Mathf.Max(0f, source.clip.length - 0.01f));
             source.time = t;
             pauseTime = t;
-            if (running) anchorDsp = AudioSettings.dspTime - t;
+            if (running)
+            {
+                anchorDsp = AudioSettings.dspTime - t;
+                smoothingTime = AudioSettings.dspTime - anchorDsp;
+            }
         }
     }
 }

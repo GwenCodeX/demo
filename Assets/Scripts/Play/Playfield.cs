@@ -5,12 +5,14 @@ using RhythmPlayer.Core;
 namespace RhythmPlayer.Play
 {
     /// 六边形演奏面板：左列上中下 = 键 1/2/3，右列上中下 = 键 4/5/6。
-    /// 音符从六边形外沿"判定点法线方向"飞向判定点（位置 = f(剩余拍数)），
-    /// 天然与音乐同步；皮肤精灵留空时退回纯色矩形。
+    /// 音符从六边形中心"冒出来"，沿判定点法线向外飞，到达边缘判定点的瞬间即拍点。
+    /// 皮肤精灵留空时退回纯色矩形。
     public sealed class Playfield : MonoBehaviour
     {
         // 键位 1-6 → 六边形角度（度）：120°=左上, 180°=左中, 240°=左下, 60°=右上, 0°=右中, 300°=右下
         static readonly float[] PadAngleDeg = { 120f, 180f, 240f, 60f, 0f, 300f };
+        const float Overshoot = 0.4f;      // 音符越过判定点后多远消失
+        const float BothLineWindow = 0.9f; // 双押连线提前出现距离
 
         [Header("引用")]
         [SerializeField] SongClock clock;
@@ -29,12 +31,10 @@ namespace RhythmPlayer.Play
         [Header("六边形布局（世界单位）")]
         [Tooltip("六边形中心到顶点的距离")]
         [SerializeField] float hexRadius = 4.3f;
-        [Tooltip("音符从判定点外多远开始出现")]
-        [SerializeField] float spawnDistance = 7f;
 
         [Header("手感")]
-        [Tooltip("每拍飞行距离，越大越快")]
-        [SerializeField] float unitsPerBeat = 2.2f;
+        [Tooltip("每拍飞行距离，越大越快（中心到判定点的飞行时间 = 判定点距离 / 本值 拍）")]
+        [SerializeField] float unitsPerBeat = 1.2f;
 
         [Header("按键映射（左列上中下 1/2/3，右列上中下 4/5/6）")]
         [SerializeField] KeyCode[] judgeKeys = { KeyCode.E, KeyCode.D, KeyCode.C, KeyCode.I, KeyCode.K, KeyCode.Comma };
@@ -61,12 +61,15 @@ namespace RhythmPlayer.Play
         int nextIndex;
         double lastBeat;
         bool ready;
+        string[] padLabelTexts;
         GUIStyle labelStyle;
 
         void Start()
         {
             if (clock == null) clock = FindObjectOfType<SongClock>();
+            QualitySettings.vSyncCount = 1;
             BuildVisuals();
+            BuildPadLabels();
 
             chart = ChartParser.Parse(chartAsset);
             if (chart == null || chart.Notes.Count == 0)
@@ -91,7 +94,10 @@ namespace RhythmPlayer.Play
             if (System.Math.Abs(beat - lastBeat) > 1.0) ResetTo(beat);
             lastBeat = beat;
 
-            while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= spawnDistance)
+            var apothem = hexRadius * 0.866f;
+
+            // 音符到达中心点时才出现，之后一路向外飞
+            while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= apothem)
             {
                 Activate(nextIndex);
                 nextIndex++;
@@ -103,25 +109,40 @@ namespace RhythmPlayer.Play
                 var note = view.Note;
                 var lane = Mathf.Clamp(note.Lane, 0, 5);
                 var radial = PadDirection(lane);
-                var pad = radial * (hexRadius * 0.866f);
-                var approach = (float)(note.StartBeat - beat) * unitsPerBeat;
-                var tailOffset = (float)(note.EndBeat - beat) * unitsPerBeat;
                 var rotation = Quaternion.Euler(0f, 0f, PadAngleDeg[lane]);
                 var noteWidth = 0.9f;
 
-                PlaceNote(view.Head, pad + radial * approach, rotation, noteWidth, 0.3f);
+                // 距离中心：0 = 中心（出生点），apothem = 判定点（打击位置）
+                var headDist = apothem - (float)(note.StartBeat - beat) * unitsPerBeat;
+                var tailDist = apothem - (float)(note.EndBeat - beat) * unitsPerBeat;
 
                 if (note.IsHold)
                 {
-                    var bodyCenter = pad + radial * ((approach + tailOffset) * 0.5f);
-                    var bodyLength = Mathf.Max(0.05f, (float)(note.EndBeat - note.StartBeat) * unitsPerBeat);
-                    PlaceBody(view.Body, bodyCenter, rotation * Quaternion.Euler(0f, 0f, 90f), noteWidth * 0.55f, bodyLength);
-                    PlaceNote(view.Tail, pad + radial * tailOffset, rotation, noteWidth, 0.3f);
+                    headDist = Mathf.Min(headDist, apothem);  // 头到达判定点后钉住
+                    tailDist = Mathf.Min(tailDist, headDist); // 尾不越过头
+                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f);
+
+                    var bodyLength = headDist - tailDist;
+                    if (bodyLength > 0.02f)
+                    {
+                        view.Body.gameObject.SetActive(true);
+                        PlaceBody(view.Body, radial * ((headDist + tailDist) * 0.5f), rotation * Quaternion.Euler(0f, 0f, 90f), noteWidth * 0.55f, bodyLength);
+                    }
+                    else if (view.Body.gameObject.activeSelf)
+                    {
+                        view.Body.gameObject.SetActive(false);
+                    }
+
+                    PlaceNote(view.Tail, radial * tailDist, rotation, noteWidth, 0.3f);
+                    UpdateBothLine(view, apothem, headDist);
+                    if (tailDist > apothem + Overshoot) Release(i);
                 }
-
-                UpdateBothLine(view, approach, tailOffset);
-
-                if (tailOffset < -0.35f) Release(i);
+                else
+                {
+                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f);
+                    UpdateBothLine(view, apothem, headDist);
+                    if (headDist > apothem + Overshoot) Release(i);
+                }
             }
         }
 
@@ -149,7 +170,6 @@ namespace RhythmPlayer.Play
             {
                 SetSprite(view.Body, holdBodySprite, new Color(0.45f, 0.68f, 1f, 0.5f));
                 SetSprite(view.Tail, holdTailSprite, new Color(0.78f, 0.92f, 1f));
-                view.Body.gameObject.SetActive(true);
                 view.Tail.gameObject.SetActive(true);
             }
             else
@@ -216,11 +236,11 @@ namespace RhythmPlayer.Play
             renderer.transform.localScale = new Vector3(width / Mathf.Max(0.0001f, size.x), length / Mathf.Max(0.0001f, size.y), 1f);
         }
 
-        void UpdateBothLine(NoteView view, float approach, float tailOffset)
+        void UpdateBothLine(NoteView view, float apothem, float headDist)
         {
             var note = view.Note;
             var show = bothLineSprite != null && note.PartnerLane >= 0 && note.Lane < note.PartnerLane
-                       && approach <= 3.5f && tailOffset >= -0.35f;
+                       && headDist >= apothem - BothLineWindow;
             if (!show)
             {
                 if (view.BothLine.gameObject.activeSelf) view.BothLine.gameObject.SetActive(false);
@@ -314,9 +334,15 @@ namespace RhythmPlayer.Play
             }
         }
 
+        void BuildPadLabels()
+        {
+            padLabelTexts = new string[6];
+            for (var i = 0; i < 6; i++) padLabelTexts[i] = $"{i + 1} ({KeyLabel(i)})";
+        }
+
         void OnGUI()
         {
-            if (!showPadLabels) return;
+            if (!showPadLabels || padLabelTexts == null) return;
             var cam = Camera.main;
             if (cam == null) return;
 
@@ -331,8 +357,7 @@ namespace RhythmPlayer.Play
             {
                 var screen = cam.WorldToScreenPoint(PadPosition(i) * 0.82f);
                 if (screen.z <= 0f) continue;
-                var text = $"{i + 1} ({KeyLabel(i)})";
-                GUI.Label(new Rect(screen.x - 45f, Screen.height - screen.y - 12f, 90f, 24f), text, labelStyle);
+                GUI.Label(new Rect(screen.x - 45f, Screen.height - screen.y - 12f, 90f, 24f), padLabelTexts[i], labelStyle);
             }
         }
 
