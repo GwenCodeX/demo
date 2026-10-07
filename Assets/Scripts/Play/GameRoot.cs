@@ -42,6 +42,7 @@ namespace RhythmPlayer.Play
         const string KeyPrefix = "RhythmPlayer.Key";
         const string JudgeOffsetKey = "RhythmPlayer.JudgeOffsetMs";
         const string HoldGraceKey = "RhythmPlayer.HoldGraceMs";
+        const string JudgeZoneKey = "RhythmPlayer.ShowJudgeZones";
         const string CountInKey = "RhythmPlayer.CountIn";
 
         static readonly int[] FpsPresets = { 60, 90, 120, 144, 165, 240, 300 };
@@ -70,6 +71,7 @@ namespace RhythmPlayer.Play
         int judgeOffsetMs;
         int holdGraceMs = 120;
         bool countInEnabled = true;
+        bool showJudgeZones = true;
         Metronome metronome;
         readonly Dictionary<string, AudioClip> clipCache = new Dictionary<string, AudioClip>();
         readonly Queue<string> clipCacheOrder = new Queue<string>();
@@ -121,6 +123,7 @@ namespace RhythmPlayer.Play
             judgeOffsetMs = Mathf.Clamp(PlayerPrefs.GetInt(JudgeOffsetKey, 0), -100, 100);
             holdGraceMs = Mathf.Clamp(PlayerPrefs.GetInt(HoldGraceKey, 120), 0, 200);
             countInEnabled = PlayerPrefs.GetInt(CountInKey, 1) != 0;
+            showJudgeZones = PlayerPrefs.GetInt(JudgeZoneKey, 1) != 0;
             LoadKeyBindings();
             metronome = FindObjectOfType<Metronome>();
 
@@ -159,6 +162,7 @@ namespace RhythmPlayer.Play
                 playfield.SetAutoPlay(autoPlayEnabled);
                 playfield.SetJudgeOffsetSeconds(judgeOffsetMs / 1000f);
                 playfield.SetHoldReleaseGrace(holdGraceMs / 1000f);
+                playfield.SetJudgeZonesVisible(showJudgeZones);
             }
             ApplyFrameRate();
         }
@@ -187,6 +191,7 @@ namespace RhythmPlayer.Play
             PlayerPrefs.SetInt(JudgeOffsetKey, judgeOffsetMs);
             PlayerPrefs.SetInt(HoldGraceKey, holdGraceMs);
             PlayerPrefs.SetInt(CountInKey, countInEnabled ? 1 : 0);
+            PlayerPrefs.SetInt(JudgeZoneKey, showJudgeZones ? 1 : 0);
             PlayerPrefs.Save();
         }
 
@@ -235,6 +240,13 @@ namespace RhythmPlayer.Play
         void ToggleCountIn()
         {
             countInEnabled = !countInEnabled;
+            SaveSettings();
+        }
+
+        void ToggleJudgeZones()
+        {
+            showJudgeZones = !showJudgeZones;
+            if (playfield != null) playfield.SetJudgeZonesVisible(showJudgeZones);
             SaveSettings();
         }
 
@@ -900,6 +912,8 @@ namespace RhythmPlayer.Play
             if (r4 != 0) AdjustHoldGrace(r4 * 10);
             GUI.Label(new Rect(rightX, rowY + 120f, 150f, 52f), "开曲定位音", settingsLabelStyle);
             if (GUI.Button(new Rect(rightX + 152f, rowY + 120f, 238f, 46f), countInEnabled ? "开（4 拍打击音）" : "关", smallButtonStyle)) ToggleCountIn();
+            GUI.Label(new Rect(rightX, rowY + 180f, 150f, 52f), "判定区显示", settingsLabelStyle);
+            if (GUI.Button(new Rect(rightX + 152f, rowY + 180f, 238f, 46f), showJudgeZones ? "显示（6 个落点分区）" : "隐藏", smallButtonStyle)) ToggleJudgeZones();
 
             var mapY = panel.y + 316f;
             GUI.Label(new Rect(panel.x, mapY, panel.width, 24f), "—— 按键映射（点后按新键，Esc 取消）——", hintStyle);

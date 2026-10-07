@@ -18,6 +18,7 @@ namespace RhythmPlayer.Play
         const float CoolWindowMs = 120f;
         const float GoodWindowMs = 160f;
         const float FrameDuration = 0.045f;
+        const int MaxPointers = 10;
         const float PopupLife = 0.45f;
         const float EffectWidth = 1.7f;
         const int ComboShowFrom = 4;
@@ -81,6 +82,14 @@ namespace RhythmPlayer.Play
         [Header("触摸输入")]
         [SerializeField] bool touchEnabled = true;
         [SerializeField] float touchRadius = 1.1f;
+        [Tooltip("落点分区判定：手指落在判定点的分区内即算命中（可搓：滑过进入也触发）")]
+        [SerializeField] bool innerScreenJudge = true;
+        [Tooltip("落点分区内边界：内六边形相对外六边形的比例（0.5 = 外圈一半以上都是判定区）")]
+        [SerializeField] float landingInnerRatio = 0.5f;
+        [Tooltip("判定区线框颜色")]
+        [SerializeField] Color judgeZoneColor = new Color(0.55f, 0.85f, 1f, 0.55f);
+        [Tooltip("判定区线框粗细（世界单位）")]
+        [SerializeField] float judgeZoneLineWidth = 0.05f;
 
         [Header("启动")]
         [SerializeField] bool autoPlay = true;
@@ -125,6 +134,7 @@ namespace RhythmPlayer.Play
         readonly float[] padFlashTimer = new float[6];
         readonly float[] padMissTimer = new float[6];
         readonly bool[] laneTouchHeld = new bool[6];
+        readonly int[] pointerLane = new int[MaxPointers];
 
         CompiledChart chart;
         int nextIndex;
@@ -136,6 +146,8 @@ namespace RhythmPlayer.Play
         int slowCount;
         bool ready;
         Transform boardRoot;
+        Transform judgeZoneRoot;
+        bool judgeZonesVisible = true;
         SpriteRenderer backgroundRenderer;
         GameObject comboRoot;
         SpriteRenderer comboTag;
@@ -280,6 +292,12 @@ namespace RhythmPlayer.Play
         public void SetBoardVisible(bool visible)
         {
             if (boardRoot != null) boardRoot.gameObject.SetActive(visible);
+        }
+
+        public void SetJudgeZonesVisible(bool visible)
+        {
+            judgeZonesVisible = visible;
+            if (judgeZoneRoot != null) judgeZoneRoot.gameObject.SetActive(visible);
         }
 
         /// <summary>设置判定偏移（秒，正值 = 判定整体延后，补偿习惯性打晚）</summary>
@@ -857,41 +875,72 @@ namespace RhythmPlayer.Play
                 for (var i = 0; i < Input.touchCount; i++)
                 {
                     var touch = Input.GetTouch(i);
-                    if (touch.phase == TouchPhase.Began) TryPadAtScreenPoint(touch.position);
-                    if (touch.phase != TouchPhase.Ended && touch.phase != TouchPhase.Canceled)
-                    {
-                        var held = PadAtScreenPoint(touch.position);
-                        if (held >= 0) laneTouchHeld[held] = true;
-                    }
+                    var slot = touch.fingerId % MaxPointers;
+                    var ended = touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled;
+                    var lane = ended ? -1 : PadAtScreenPoint(touch.position);
+                    TriggerLane(slot, lane);
+                    if (!ended && lane >= 0) laneTouchHeld[lane] = true;
                 }
             }
             else
             {
-                if (Input.GetMouseButtonDown(0)) TryPadAtScreenPoint(Input.mousePosition);
-                if (Input.GetMouseButton(0))
-                {
-                    var held = PadAtScreenPoint(Input.mousePosition);
-                    if (held >= 0) laneTouchHeld[held] = true;
-                }
+                var lane = Input.GetMouseButton(0) ? PadAtScreenPoint(Input.mousePosition) : -1;
+                TriggerLane(0, lane);
+                if (lane >= 0) laneTouchHeld[lane] = true;
             }
         }
 
-        void TryPadAtScreenPoint(Vector2 screenPoint)
+        /// <summary>指针进入某条轨道的落点分区即触发一次判定；滑过（搓）到别的分区同样触发</summary>
+        void TriggerLane(int pointer, int lane)
         {
-            var nearest = PadAtScreenPoint(screenPoint);
-            if (nearest < 0) return;
+            if (pointer < 0 || pointer >= MaxPointers) return;
 
-            padFlashTimer[nearest] = 0.18f;
-            if (ready && !autoPlay && clock != null && clock.IsRunning) TryJudgeByInput(nearest);
+            var stored = lane >= 0 ? lane + 1 : 0;
+            if (pointerLane[pointer] == stored) return;
+            pointerLane[pointer] = stored;
+            if (lane < 0) return;
+
+            padFlashTimer[lane] = 0.18f;
+            if (ready && !autoPlay && clock != null && clock.IsRunning) TryJudgeByInput(lane);
         }
 
-        /// <summary>屏幕坐标命中的判定点下标（-1 = 没命中）</summary>
+        int SectorAt(Vector2 world)
+        {
+            var angle = Mathf.Atan2(world.y, world.x) * Mathf.Rad2Deg;
+            var sector = -1;
+            var sectorDelta = float.MaxValue;
+            for (var i = 0; i < 6; i++)
+            {
+                var delta = Mathf.Abs(Mathf.DeltaAngle(angle, PadAngleDeg[i]));
+                if (delta >= sectorDelta) continue;
+                sector = i;
+                sectorDelta = delta;
+            }
+            return sector;
+        }
+
+        float HexDistance(Vector2 world)
+        {
+            var distance = 0f;
+            for (var i = 0; i < 6; i++) distance = Mathf.Max(distance, Vector3.Dot(world, PadDirection(i)));
+            return distance;
+        }
+
+        /// <summary>屏幕坐标命中的轨道下标（-1 = 没命中）：判定点落点分区，滑过进入即触发</summary>
         int PadAtScreenPoint(Vector2 screenPoint)
         {
             var cam = MainCamera;
             if (cam == null) return -1;
 
             var world = cam.ScreenToWorldPoint(new Vector3(screenPoint.x, screenPoint.y, -cam.transform.position.z));
+
+            if (innerScreenJudge)
+            {
+                var apothem = hexRadius * 0.866f;
+                var ratio = landingInnerRatio > 0f ? landingInnerRatio : 0.5f;
+                var distance = HexDistance(world);
+                if (distance <= apothem && distance >= apothem * ratio) return SectorAt(world);
+            }
 
             var nearest = -1;
             var nearestDistance = float.MaxValue;
@@ -979,6 +1028,43 @@ namespace RhythmPlayer.Play
             view.BothLine.transform.localScale = new Vector3(delta.magnitude / Mathf.Max(0.0001f, size.x), 0.75f / Mathf.Max(0.0001f, size.y), 1f);
         }
 
+        void BuildJudgeZones()
+        {
+            var root = new GameObject("JudgeZones");
+            root.transform.SetParent(boardRoot, false);
+            judgeZoneRoot = root.transform;
+
+            var apothem = hexRadius * 0.866f;
+            var ratio = landingInnerRatio > 0f ? landingInnerRatio : 0.5f;
+            var outer = new Vector3[6];
+            var inner = new Vector3[6];
+
+            for (var i = 0; i < 6; i++)
+            {
+                var vertex = (PadAngleDeg[i] + 30f) * Mathf.Deg2Rad;
+                var dir = new Vector3(Mathf.Cos(vertex), Mathf.Sin(vertex), 0f);
+                outer[i] = dir * hexRadius;
+                inner[i] = dir * (hexRadius * ratio);
+            }
+
+            for (var i = 0; i < 6; i++)
+            {
+                AddZoneLine(inner[i], inner[(i + 1) % 6]);
+                AddZoneLine(inner[i], outer[i]);
+            }
+
+            judgeZoneRoot.gameObject.SetActive(judgeZonesVisible);
+        }
+
+        void AddZoneLine(Vector3 from, Vector3 to)
+        {
+            var line = CreateQuad(judgeZoneRoot, "ZoneLine", -6, judgeZoneColor);
+            var delta = to - from;
+            line.transform.localPosition = (from + to) * 0.5f;
+            line.transform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg - 90f);
+            line.transform.localScale = new Vector3(judgeZoneLineWidth, delta.magnitude, 1f);
+        }
+
         SpriteRenderer CreateQuad(Transform parent, string name, int sortingOrder, Color color)
         {
             var go = new GameObject(name);
@@ -1039,6 +1125,8 @@ namespace RhythmPlayer.Play
                     zone.transform.localScale = new Vector3(zoneScale, zoneScale, 1f);
                 }
             }
+
+            BuildJudgeZones();
 
             for (var i = 0; i < padFlashes.Length; i++)
             {
