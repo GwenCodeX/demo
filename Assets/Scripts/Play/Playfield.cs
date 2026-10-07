@@ -84,8 +84,10 @@ namespace RhythmPlayer.Play
         [SerializeField] float touchRadius = 1.1f;
         [Tooltip("落点分区判定：手指落在判定点的分区内即算命中（可搓：滑过进入也触发）")]
         [SerializeField] bool innerScreenJudge = true;
-        [Tooltip("落点分区内边界：内六边形相对外六边形的比例（0.5 = 外圈一半以上都是判定区）")]
-        [SerializeField] float landingInnerRatio = 0.5f;
+        [Tooltip("落点分区内边界（相对判定点所在外六边形的比例，1 = 正好压在外六边形边上）")]
+        [SerializeField] float landingInnerRatio = 0.9f;
+        [Tooltip("落点分区外边界（同比例，1.3 = 判定点外侧 30%）")]
+        [SerializeField] float landingOuterRatio = 1.3f;
         [Tooltip("判定区线框颜色")]
         [SerializeField] Color judgeZoneColor = new Color(0.55f, 0.85f, 1f, 0.55f);
         [Tooltip("判定区线框粗细（世界单位）")]
@@ -937,9 +939,11 @@ namespace RhythmPlayer.Play
             if (innerScreenJudge)
             {
                 var apothem = hexRadius * 0.866f;
-                var ratio = landingInnerRatio > 0f ? landingInnerRatio : 0.5f;
+                var inner = apothem * (landingInnerRatio > 0f ? landingInnerRatio : 0.9f);
+                var outer = apothem * (landingOuterRatio > 0f ? landingOuterRatio : 1.3f);
                 var distance = HexDistance(world);
-                if (distance <= apothem && distance >= apothem * ratio) return SectorAt(world);
+                if (distance >= inner && distance <= outer) return SectorAt(world);
+                return -1;
             }
 
             var nearest = -1;
@@ -1034,23 +1038,25 @@ namespace RhythmPlayer.Play
             root.transform.SetParent(boardRoot, false);
             judgeZoneRoot = root.transform;
 
-            var apothem = hexRadius * 0.866f;
-            var ratio = landingInnerRatio > 0f ? landingInnerRatio : 0.5f;
-            var outer = new Vector3[6];
-            var inner = new Vector3[6];
+            var innerRatio = landingInnerRatio > 0f ? landingInnerRatio : 0.9f;
+            var outerRatio = landingOuterRatio > 0f ? landingOuterRatio : 1.3f;
 
             for (var i = 0; i < 6; i++)
             {
-                var vertex = (PadAngleDeg[i] + 30f) * Mathf.Deg2Rad;
-                var dir = new Vector3(Mathf.Cos(vertex), Mathf.Sin(vertex), 0f);
-                outer[i] = dir * hexRadius;
-                inner[i] = dir * (hexRadius * ratio);
-            }
+                var leftAngle = (PadAngleDeg[i] - 30f) * Mathf.Deg2Rad;
+                var rightAngle = (PadAngleDeg[i] + 30f) * Mathf.Deg2Rad;
+                var left = new Vector3(Mathf.Cos(leftAngle), Mathf.Sin(leftAngle), 0f);
+                var right = new Vector3(Mathf.Cos(rightAngle), Mathf.Sin(rightAngle), 0f);
 
-            for (var i = 0; i < 6; i++)
-            {
-                AddZoneLine(inner[i], inner[(i + 1) % 6]);
-                AddZoneLine(inner[i], outer[i]);
+                var innerLeft = left * (hexRadius * innerRatio);
+                var innerRight = right * (hexRadius * innerRatio);
+                var outerLeft = left * (hexRadius * outerRatio);
+                var outerRight = right * (hexRadius * outerRatio);
+
+                AddZoneLine(innerLeft, innerRight);
+                AddZoneLine(outerLeft, outerRight);
+                AddZoneLine(innerLeft, outerLeft);
+                AddZoneLine(innerRight, outerRight);
             }
 
             judgeZoneRoot.gameObject.SetActive(judgeZonesVisible);
