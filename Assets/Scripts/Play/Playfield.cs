@@ -13,10 +13,10 @@ namespace RhythmPlayer.Play
         const float Overshoot = 0.4f;
         const float BothLineWindow = 0.9f;
         const float BirthScaleFrom = 0.2f;
-        const float MissWindowSeconds = 0.16f;
-        const float BestWindowMs = 80f;
-        const float CoolWindowMs = 120f;
-        const float GoodWindowMs = 160f;
+        const float MissWindowSeconds = 0.1f;
+        const float BestWindowMs = 40f;
+        const float CoolWindowMs = 60f;
+        const float GoodWindowMs = 80f;
         const float FrameDuration = 0.045f;
         const int MaxPointers = 10;
         const float PopupLife = 0.45f;
