@@ -220,7 +220,7 @@ namespace RhythmPlayer.Play
                 ready = false;
                 return;
             }
-            Debug.Log($"[谱面] {song.Name}：{chart.TotalNotes} 个音符，其中长条 {chart.HoldCount} 个");
+            Debug.Log($"[谱面] {song.Name}：{chart.TotalNotes} 个音符（带持续段 {chart.HoldCount} 个，滑条行 {chart.ScrollCount} 个）");
 
             nextIndex = 0;
             lastTime = 0.0;

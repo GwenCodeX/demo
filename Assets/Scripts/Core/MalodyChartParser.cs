@@ -100,7 +100,8 @@ namespace RhythmPlayer.Core
                 var start = BeatValue(note.beat);
                 var end = note.endbeat != null ? BeatValue(note.endbeat) : start;
                 var lane = Mathf.Clamp(note.column, 0, 5);
-                data.Notes.Add(new ChartNote(0, '-', 0, start, end, lane, false, -1));
+                var head = (lane + 1).ToString();
+                data.Notes.Add(new ChartNote(head, 0, '-', 0, start, end, lane, false, -1, false, end > start, data.Notes.Count));
             }
 
             // 按拍点排序，并把同一拍上的两个音符标记成双押
@@ -120,10 +121,12 @@ namespace RhythmPlayer.Core
                 if (previous.Lane == current.Lane) continue;                               // 同轨不算双押
                 if (Math.Abs(previous.StartBeat - current.StartBeat) > 0.001) continue;    // 拍点不同
 
-                data.Notes[i - 1] = new ChartNote(previous.Style, previous.Side, previous.AngleDeg,
-                    previous.StartBeat, previous.EndBeat, previous.Lane, true, current.Lane);
-                data.Notes[i] = new ChartNote(current.Style, current.Side, current.AngleDeg,
-                    current.StartBeat, current.EndBeat, current.Lane, true, previous.Lane);
+                data.Notes[i - 1] = new ChartNote(previous.Head, previous.Style, previous.Side, previous.AngleDeg,
+                    previous.StartBeat, previous.EndBeat, previous.Lane, true, current.Lane,
+                    previous.IsScroll, previous.HasEnd, previous.SourceIndex);
+                data.Notes[i] = new ChartNote(current.Head, current.Style, current.Side, current.AngleDeg,
+                    current.StartBeat, current.EndBeat, current.Lane, true, previous.Lane,
+                    current.IsScroll, current.HasEnd, current.SourceIndex);
             }
         }
 

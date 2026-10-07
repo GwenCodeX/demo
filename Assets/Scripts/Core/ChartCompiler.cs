@@ -13,6 +13,10 @@ namespace RhythmPlayer.Core
         public bool IsHold;
         public bool IsDouble;
         public sbyte PartnerLane;
+        public bool IsScroll;
+        public byte ScrollType;
+        public short ScrollAngle;
+        public bool ScrollRight;
     }
 
     /// <summary>编译后的谱面：按开始时间排序的运行时音符 + 统计</summary>
@@ -20,6 +24,7 @@ namespace RhythmPlayer.Core
     {
         public RuntimeNote[] Notes;
         public int HoldCount;
+        public int ScrollCount;
         public int TotalNotes => Notes != null ? Notes.Length : 0;
     }
 
@@ -76,11 +81,13 @@ namespace RhythmPlayer.Core
         {
             var notes = new RuntimeNote[data.Notes.Count];
             var holdCount = 0;
+            var scrollCount = 0;
 
             for (var i = 0; i < data.Notes.Count; i++)
             {
                 var note = data.Notes[i];
                 if (note.IsHold) holdCount++;
+                if (note.IsScroll) scrollCount++;
                 notes[i] = new RuntimeNote
                 {
                     StartSeconds = firstTimeOffset + (float)note.StartBeat * secondsPerBeat,
@@ -89,10 +96,14 @@ namespace RhythmPlayer.Core
                     IsHold = note.IsHold,
                     IsDouble = note.IsDouble,
                     PartnerLane = (sbyte)Mathf.Clamp(note.PartnerLane, -1, 5),
+                    IsScroll = note.IsScroll,
+                    ScrollType = (byte)Mathf.Clamp(note.Style, 0, 6),
+                    ScrollAngle = (short)note.AngleDeg,
+                    ScrollRight = note.Side == 'R',
                 };
             }
 
-            return new CompiledChart { Notes = notes, HoldCount = holdCount };
+            return new CompiledChart { Notes = notes, HoldCount = holdCount, ScrollCount = scrollCount };
         }
     }
 }
