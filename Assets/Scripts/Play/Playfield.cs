@@ -1230,7 +1230,7 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            scrollBodySprite = SpriteFactory.Trapezoid(0.3f);
+            scrollBodySprite = SpriteFactory.Crescent();
             BuildJudgeZones();
 
 
