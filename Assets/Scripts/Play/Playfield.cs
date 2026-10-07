@@ -134,7 +134,7 @@ namespace RhythmPlayer.Play
         readonly List<Effect> effects = new List<Effect>();
         readonly Stack<SpriteRenderer> effectPool = new Stack<SpriteRenderer>();
         readonly List<SpriteRenderer> comboDigits = new List<SpriteRenderer>();
-        readonly SpriteRenderer[] padFlashes = new SpriteRenderer[6];
+        readonly SpriteRenderer[] judgeZoneFlashes = new SpriteRenderer[6];
         readonly float[] padFlashTimer = new float[6];
         readonly float[] padMissTimer = new float[6];
         readonly bool[] laneTouchHeld = new bool[6];
@@ -631,11 +631,7 @@ namespace RhythmPlayer.Play
                     bestIndex = i;
                 }
             }
-            if (bestIndex < 0)
-            {
-                PlayHitSound(hitSoundVolume * 0.3f);
-                return;
-            }
+            if (bestIndex < 0) return;
 
             var ms = Mathf.Abs(bestDelta) * 1000f;
             var grade = ms <= BestWindowMs ? GradeBest : ms <= CoolWindowMs ? GradeCool : GradeGood;
@@ -828,7 +824,7 @@ namespace RhythmPlayer.Play
             var keys = judgeKeys;
             if (keys != null)
             {
-                for (var i = 0; i < padFlashes.Length && i < keys.Length; i++)
+                for (var i = 0; i < judgeZoneFlashes.Length && i < keys.Length; i++)
                 {
                     if (Input.GetKeyDown(keys[i]))
                     {
@@ -838,24 +834,27 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            for (var i = 0; i < padFlashes.Length; i++)
+            for (var i = 0; i < judgeZoneFlashes.Length; i++)
             {
+                var flash = judgeZoneFlashes[i];
+                if (flash == null) continue;
+
                 if (padMissTimer[i] > 0f)
                 {
                     padMissTimer[i] -= Time.deltaTime;
-                    padFlashes[i].gameObject.SetActive(true);
-                    padFlashes[i].color = new Color(1f, 0.3f, 0.3f, 0.25f + 0.55f * Mathf.Clamp01(padMissTimer[i] / 0.35f));
+                    flash.gameObject.SetActive(true);
+                    flash.color = new Color(1f, 0.3f, 0.3f, 0.25f + 0.55f * Mathf.Clamp01(padMissTimer[i] / 0.35f));
                 }
                 else if (padFlashTimer[i] > 0f)
                 {
                     padFlashTimer[i] -= Time.deltaTime;
                     var alpha = Mathf.Clamp01(padFlashTimer[i] / 0.18f) * 0.85f;
-                    padFlashes[i].gameObject.SetActive(true);
-                    padFlashes[i].color = new Color(0.55f, 0.95f, 1f, alpha);
+                    flash.gameObject.SetActive(true);
+                    flash.color = new Color(0.55f, 0.95f, 1f, alpha);
                 }
-                else if (padFlashes[i].gameObject.activeSelf)
+                else if (flash.gameObject.activeSelf)
                 {
-                    padFlashes[i].gameObject.SetActive(false);
+                    flash.gameObject.SetActive(false);
                 }
             }
 
@@ -1065,6 +1064,23 @@ namespace RhythmPlayer.Play
                 AddZoneLine(b, d);
             }
 
+            var innerRadius = apothem * innerRatio;
+            var outerRadius = apothem * outerRatio;
+            var depth = outerRadius - innerRadius;
+            var outerHalf = outerRadius * Mathf.Tan(half * Mathf.Deg2Rad);
+            var trapezoid = SpriteFactory.Trapezoid(innerRatio / outerRatio);
+
+            for (var i = 0; i < 6; i++)
+            {
+                var flash = CreateQuad(judgeZoneRoot, "ZoneFlash", 3, new Color(1f, 1f, 1f, 0f));
+                flash.sprite = trapezoid;
+                flash.transform.localPosition = PadDirection(i) * ((innerRadius + outerRadius) * 0.5f);
+                flash.transform.localRotation = Quaternion.Euler(0f, 0f, PadAngleDeg[i] - 90f);
+                flash.transform.localScale = new Vector3(outerHalf * 2f, depth, 1f);
+                flash.gameObject.SetActive(false);
+                judgeZoneFlashes[i] = flash;
+            }
+
             judgeZoneRoot.gameObject.SetActive(judgeZonesVisible);
         }
 
@@ -1147,14 +1163,6 @@ namespace RhythmPlayer.Play
 
             BuildJudgeZones();
 
-            for (var i = 0; i < padFlashes.Length; i++)
-            {
-                var flash = CreateQuad(transform, "PadFlash" + (i + 1), 3, new Color(0.55f, 0.95f, 1f, 0f));
-                flash.transform.localPosition = PadPosition(i);
-                flash.transform.localScale = new Vector3(0.9f, 0.9f, 1f);
-                flash.gameObject.SetActive(false);
-                padFlashes[i] = flash;
-            }
 
             comboRoot = new GameObject("ComboDisplay");
             comboRoot.transform.SetParent(transform, false);
