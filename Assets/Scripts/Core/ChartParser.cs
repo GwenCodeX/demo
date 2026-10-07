@@ -85,6 +85,9 @@ namespace RhythmPlayer.Core
     public static class ChartParser
     {
         static readonly char[] Dash = { '-' };
+
+        /// <summary>六个外区（1-6）对应的方向角度，顺序与轨道一致（1=120°,2=180°,3=240°,4=60°,5=0°,6=300°）</summary>
+        static readonly int[] ZoneAngles = { 120, 180, 240, 60, 0, 300 };
         const string BeatFormat = "0.#####";
 
         /// <summary>从 TextAsset 解析（编辑器里直接引用资源时用）</summary>
@@ -187,7 +190,7 @@ namespace RhythmPlayer.Core
             if (!TryParseBeats(parts, out var start, out var end, out var hasEnd)) return false;
 
             data.Notes.Add(new ChartNote(head, style, head[1], angle, start, end,
-                angle / 60 % 6, false, -1, true, hasEnd, index));
+                LandingLane(style, head[1], angle), false, -1, true, hasEnd, index));
             return true;
         }
 
@@ -213,6 +216,38 @@ namespace RhythmPlayer.Core
                     lanes[i], isDouble, partner, false, hasEnd, index));
             }
             return true;
+        }
+
+        /// <summary>
+        /// 滑条落点区：`{起点区 1-6}{L 逆 / R 顺 / LO 直}{旋转量}`，
+        /// 落点 = 起点区方向 ± 旋转量（L 逆时针增加、R 顺时针减小）；n0 视为"从中心出发"，角度即落点方向。
+        /// </summary>
+        static int LandingLane(int style, char side, int angleDeg)
+        {
+            if (style <= 0) return LaneOfAngle(angleDeg);
+
+            var startAngle = ZoneAngles[Mathf.Clamp(style - 1, 0, 5)];
+            var steps = angleDeg / 60;
+            if (side == 'R') steps = -steps;
+            else if (side != 'L') steps = 0; // LO = 直：不旋转
+            return LaneOfAngle(startAngle + steps * 60);
+        }
+
+        /// <summary>方向角度 → 最近的区（0-5）</summary>
+        static int LaneOfAngle(int angleDeg)
+        {
+            var best = 0;
+            var bestDelta = float.MaxValue;
+            for (var i = 0; i < ZoneAngles.Length; i++)
+            {
+                var delta = Mathf.Abs(Mathf.DeltaAngle(angleDeg, ZoneAngles[i]));
+                if (delta < bestDelta)
+                {
+                    bestDelta = delta;
+                    best = i;
+                }
+            }
+            return best;
         }
 
         /// <summary>键位字符 → 轨道：1-6 → 0-5；A-F → 0-5（另一族，语义未确认）</summary>

@@ -19,6 +19,8 @@ namespace RhythmPlayer.Play
         const float GoodWindowMs = 80f;
         const float FrameDuration = 0.045f;
         const int MaxPointers = 10;
+        static readonly Color ScrollIdleColor = new Color(0.35f, 0.95f, 1f);
+        static readonly Color ScrollHitColor = new Color(1f, 0.4f, 0.8f);
         const float PopupLife = 0.45f;
         const float EffectWidth = 1.7f;
         const int ComboShowFrom = 4;
@@ -151,6 +153,7 @@ namespace RhythmPlayer.Play
         bool ready;
         Transform boardRoot;
         Transform judgeZoneRoot;
+        Sprite scrollBodySprite;
         bool judgeZonesVisible = true;
         SpriteRenderer backgroundRenderer;
         GameObject comboRoot;
@@ -432,6 +435,14 @@ namespace RhythmPlayer.Play
                     if (nowSeconds - judgeOffsetSeconds >= note.StartSeconds + MissWindowSeconds) ApplyJudgment(view, GradeMiss);
                     else if (autoPlay && nowSeconds >= note.StartSeconds) ApplyJudgment(view, GradeBest);
                 }
+
+                // 滑条：只要判定区被按住就算判定（提前按住也算，判定后可以松手）
+                if (!view.Judged && note.IsScroll)
+                {
+                    var scrollLane = Mathf.Clamp(note.Lane, 0, 5);
+                    if (IsLaneHeld(scrollLane) && nowSeconds - judgeOffsetSeconds >= note.StartSeconds - GoodWindowMs / 1000f)
+                        ApplyJudgment(view, GradeBest);
+                }
                 if (view.Vanish)
                 {
                     Release(i);
@@ -439,7 +450,7 @@ namespace RhythmPlayer.Play
                 }
 
                 // 长条按持：手动模式提前松手 = 断连（Miss）
-                if (note.IsHold && view.HoldActive && !autoPlay)
+                if (note.IsHold && !note.IsScroll && view.HoldActive && !autoPlay)
                 {
                     var holdLane = Mathf.Clamp(note.Lane, 0, 5);
                     if (!IsLaneHeld(holdLane))
@@ -484,7 +495,44 @@ namespace RhythmPlayer.Play
                     headAlpha = 1f;
                 }
 
-                if (note.IsHold)
+                if (note.IsScroll)
+                {
+                    var landing = PadAngleDeg[lane];
+                    var startAngle = note.ScrollType >= 1 ? PadAngleDeg[Mathf.Clamp(note.ScrollType - 1, 0, 5)] : landing;
+                    var startRadius = note.ScrollType >= 1 ? hexRadius * 0.5f : spawnRadius;
+                    var startPos = AngleDir(startAngle) * startRadius;
+                    var endPos = AngleDir(landing) * apothem;
+                    var travel = Mathf.Min(headDist, apothem + Overshoot) - apothem;
+                    var shift = AngleDir(landing) * travel;
+                    var delta = endPos - startPos;
+                    var length = Mathf.Max(0.05f, delta.magnitude);
+                    var chord = Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg - 90f;
+
+                    view.Body.gameObject.SetActive(true);
+                    view.Body.sprite = scrollBodySprite;
+                    view.Body.transform.localPosition = (startPos + endPos) * 0.5f + shift;
+                    view.Body.transform.localRotation = Quaternion.Euler(0f, 0f, chord);
+                    view.Body.transform.localScale = new Vector3(noteWidth * 0.8f, length, 1f);
+
+                    view.Head.gameObject.SetActive(true);
+                    view.Head.transform.localPosition = endPos + shift;
+                    view.Head.transform.localRotation = rotation;
+                    view.Head.transform.localScale = Vector3.one * noteWidth;
+
+                    view.Tail.gameObject.SetActive(true);
+                    view.Tail.transform.localPosition = startPos + shift;
+                    view.Tail.transform.localRotation = rotation;
+                    view.Tail.transform.localScale = Vector3.one * (noteWidth * 0.6f);
+
+                    var tint = view.Judged ? ScrollHitColor : ScrollIdleColor;
+                    view.Head.color = tint;
+                    view.Tail.color = tint;
+                    view.Body.color = new Color(tint.r, tint.g, tint.b, 0.5f);
+                    if (view.BothLine.gameObject.activeSelf) view.BothLine.gameObject.SetActive(false);
+
+                    if (nowSeconds - judgeOffsetSeconds > note.EndSeconds) Release(i);
+                }
+                else if (note.IsHold)
                 {
                     headDist = Mathf.Min(headDist, apothem);
 
@@ -506,6 +554,14 @@ namespace RhythmPlayer.Play
 
                     view.Tail.gameObject.SetActive(true);
                     PlaceNote(view.Tail, radial * tailDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
+
+                    if (note.IsScroll)
+                    {
+                        var tint = view.Judged ? ScrollHitColor : ScrollIdleColor;
+                        view.Head.color = tint;
+                        view.Tail.color = tint;
+                        view.Body.color = new Color(tint.r, tint.g, tint.b, 0.45f);
+                    }
 
                     UpdateBothLine(view, apothem, headDist);
                     if (tailRaw > apothem + Overshoot) Release(i);
@@ -543,7 +599,13 @@ namespace RhythmPlayer.Play
             view.Vanish = false;
             view.HoldActive = false;
 
-            if (note.IsHold)
+            if (note.IsScroll)
+            {
+                SetSprite(view.Head, null, ScrollIdleColor);
+                SetSprite(view.Tail, null, ScrollIdleColor);
+                SetSprite(view.Body, scrollBodySprite, new Color(ScrollIdleColor.r, ScrollIdleColor.g, ScrollIdleColor.b, 0.5f));
+            }
+            else if (note.IsHold)
             {
                 var holdSprite = note.IsDouble
                     ? (holdBothSprite != null ? holdBothSprite : holdHeadSprite)
@@ -1112,6 +1174,12 @@ namespace RhythmPlayer.Play
             return renderer;
         }
 
+        static Vector3 AngleDir(float angleDeg)
+        {
+            var radians = angleDeg * Mathf.Deg2Rad;
+            return new Vector3(Mathf.Cos(radians), Mathf.Sin(radians), 0f);
+        }
+
         static Vector3 PadDirection(int lane)
         {
             var radians = PadAngleDeg[Mathf.Clamp(lane, 0, 5)] * Mathf.Deg2Rad;
@@ -1162,6 +1230,7 @@ namespace RhythmPlayer.Play
                 }
             }
 
+            scrollBodySprite = SpriteFactory.Trapezoid(0.3f);
             BuildJudgeZones();
 
 
