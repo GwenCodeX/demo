@@ -135,6 +135,7 @@ namespace RhythmPlayer.Play
         int fastCount;
         int slowCount;
         bool ready;
+        Transform boardRoot;
         SpriteRenderer backgroundRenderer;
         GameObject comboRoot;
         SpriteRenderer comboTag;
@@ -208,6 +209,7 @@ namespace RhythmPlayer.Play
             nextIndex = 0;
             lastTime = 0.0;
             ready = true;
+            SetBoardVisible(true);
             lastAccuracy = -1f;
             lastComboShown = -1;
 
@@ -228,6 +230,7 @@ namespace RhythmPlayer.Play
 
             chart = null;
             ready = false;
+            SetBoardVisible(false);
             ResetCounters();
             if (backgroundRenderer != null) backgroundRenderer.gameObject.SetActive(false);
             if (comboRoot != null) comboRoot.SetActive(false);
@@ -273,6 +276,11 @@ namespace RhythmPlayer.Play
         public void SetNoteSpeed(float value) => unitsPerBeat = Mathf.Clamp(value, 0.6f, 6f);
 
         public void SetAutoPlay(bool value) => autoPlay = value;
+        public void SetBackground(string path) => RefreshBackground(path);
+        public void SetBoardVisible(bool visible)
+        {
+            if (boardRoot != null) boardRoot.gameObject.SetActive(visible);
+        }
 
         /// <summary>设置判定偏移（秒，正值 = 判定整体延后，补偿习惯性打晚）</summary>
         public void SetJudgeOffsetSeconds(float value) => judgeOffsetSeconds = value;
@@ -1027,20 +1035,25 @@ namespace RhythmPlayer.Play
                 backgroundRenderer.transform.localScale = new Vector3(scale, scale, 1f);
             }
 
+            var board = new GameObject("Board");
+            board.transform.SetParent(transform, false);
+            boardRoot = board.transform;
+            board.SetActive(ready);
+
             var hexApothem = hexRadius * 0.866f;
             if (hexFrameSprite != null)
             {
                 var size = hexFrameSprite.bounds.size;
                 var frameScale = hexRadius * 2f / Mathf.Max(0.0001f, Mathf.Max(size.x, size.y));
 
-                var frame = CreateQuad(transform, "HexFrame", -5, Color.white);
+                var frame = CreateQuad(boardRoot, "HexFrame", -5, Color.white);
                 frame.sprite = hexFrameSprite;
                 frame.transform.localPosition = new Vector3(0f, 0f, 1f);
                 frame.transform.localScale = new Vector3(frameScale, frameScale, 1f);
 
                 if (showSpawnZone)
                 {
-                    var zone = CreateQuad(transform, "SpawnZone", -4, new Color(0.6f, 0.9f, 1f, 0.22f));
+                    var zone = CreateQuad(boardRoot, "SpawnZone", -4, new Color(0.6f, 0.9f, 1f, 0.22f));
                     zone.sprite = hexFrameSprite;
                     var zoneScale = frameScale * (spawnRadius / hexApothem);
                     zone.transform.localPosition = new Vector3(0f, 0f, 0.5f);

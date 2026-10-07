@@ -352,11 +352,6 @@ namespace RhythmPlayer.Play
 
             if (loadedIndex == selectedIndex && clock != null && clock.HasClip)
             {
-                if (playfield != null)
-                {
-                    playfield.LoadSong(song);
-                    playfield.SetAutoPlay(true);
-                }
                 previewActive = true;
                 clock.PlayFrom(previewStartTime);
             }
@@ -396,6 +391,11 @@ namespace RhythmPlayer.Play
             if (loadedIndex == selectedIndex && clock != null && clock.HasClip)
             {
                 previewActive = false;
+                if (playfield != null)
+                {
+                    playfield.LoadSong(songs[selectedIndex]);
+                    playfield.SetAutoPlay(autoPlayEnabled);
+                }
                 BeginPlayback(0.0);
                 return;
             }
@@ -548,11 +548,10 @@ namespace RhythmPlayer.Play
             maxDriftMs = 0f;
             loadedIndex = index;
             clock.LoadClip(clip, song.Bpm, song.FirstTime);
-            playfield.LoadSong(song);
 
             if (preview)
             {
-                playfield.SetAutoPlay(true);
+                if (playfield != null) playfield.SetBackground(song.BackgroundPath);
                 previewStartTime = Mathf.Clamp(previewStartSeconds, 0f, Mathf.Max(0f, clip.length - previewLengthSeconds - 1f));
                 previewActive = true;
                 clock.PlayFrom(previewStartTime);
@@ -560,6 +559,7 @@ namespace RhythmPlayer.Play
             }
             else
             {
+                playfield.LoadSong(song);
                 playfield.SetAutoPlay(autoPlayEnabled);
                 BeginPlayback(0.0);
             }
