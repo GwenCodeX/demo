@@ -29,6 +29,9 @@ namespace RhythmPlayer.Core
             tickSource.clip = CreateTickClip();
         }
 
+        /// <summary>开关节拍定位音（设置项）</summary>
+        public void SetEnabled(bool value) => enableTicks = value;
+
         void Update()
         {
             if (clock == null || tickSource == null) return;

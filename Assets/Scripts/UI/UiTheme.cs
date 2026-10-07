@@ -56,6 +56,9 @@ namespace RhythmPlayer.UI
         /// <summary>设计空间高度（= 屏幕高度 ÷ 全局缩放）</summary>
         public static float Height => Screen.height / guiScale;
 
+        /// <summary>当前全局缩放（把真实屏幕坐标换算到设计空间时使用）</summary>
+        public static float GuiScale => guiScale;
+
         /// <summary>
         /// 在每个 OnGUI 开头调用：按屏幕分辨率整体缩放界面（设计基准 1280×720），
         /// 这样手机高分辨率屏上按钮和字都会等比放大，桌面端窗口大小变化也不跑版。

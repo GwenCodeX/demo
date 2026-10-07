@@ -40,6 +40,9 @@ namespace RhythmPlayer.Play
         const string FpsKey = "RhythmPlayer.FpsIndex";
         const string AutoPlayKey = "RhythmPlayer.AutoPlay";
         const string KeyPrefix = "RhythmPlayer.Key";
+        const string JudgeOffsetKey = "RhythmPlayer.JudgeOffsetMs";
+        const string HoldGraceKey = "RhythmPlayer.HoldGraceMs";
+        const string CountInKey = "RhythmPlayer.CountIn";
 
         static readonly int[] FpsPresets = { 60, 90, 120, 144, 165, 240, 300 };
 
@@ -64,6 +67,12 @@ namespace RhythmPlayer.Play
         bool autoPlayEnabled = true;
         int rebindLane = -1;
         int pendingDelete = -1;
+        int judgeOffsetMs;
+        int holdGraceMs = 120;
+        bool countInEnabled = true;
+        Metronome metronome;
+        readonly Dictionary<string, AudioClip> clipCache = new Dictionary<string, AudioClip>();
+        readonly Queue<string> clipCacheOrder = new Queue<string>();
         float resultTimer;
         float maxDriftMs;
         int selectedIndex;
@@ -109,7 +118,11 @@ namespace RhythmPlayer.Play
             noteSpeed = PlayerPrefs.GetFloat(SpeedKey, playfield != null ? playfield.NoteSpeed : 2.4f);
             fpsIndex = Mathf.Clamp(PlayerPrefs.GetInt(FpsKey, FpsPresets.Length - 1), 0, FpsPresets.Length - 1);
             autoPlayEnabled = PlayerPrefs.GetInt(AutoPlayKey, 1) != 0;
+            judgeOffsetMs = Mathf.Clamp(PlayerPrefs.GetInt(JudgeOffsetKey, 0), -100, 100);
+            holdGraceMs = Mathf.Clamp(PlayerPrefs.GetInt(HoldGraceKey, 120), 0, 200);
+            countInEnabled = PlayerPrefs.GetInt(CountInKey, 1) != 0;
             LoadKeyBindings();
+            metronome = FindObjectOfType<Metronome>();
 
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
             ApplyQualityDefaults();
@@ -144,6 +157,8 @@ namespace RhythmPlayer.Play
             {
                 playfield.SetNoteSpeed(noteSpeed);
                 playfield.SetAutoPlay(autoPlayEnabled);
+                playfield.SetJudgeOffsetSeconds(judgeOffsetMs / 1000f);
+                playfield.SetHoldReleaseGrace(holdGraceMs / 1000f);
             }
             ApplyFrameRate();
         }
@@ -169,6 +184,9 @@ namespace RhythmPlayer.Play
             PlayerPrefs.SetFloat(SpeedKey, noteSpeed);
             PlayerPrefs.SetInt(FpsKey, fpsIndex);
             PlayerPrefs.SetInt(AutoPlayKey, autoPlayEnabled ? 1 : 0);
+            PlayerPrefs.SetInt(JudgeOffsetKey, judgeOffsetMs);
+            PlayerPrefs.SetInt(HoldGraceKey, holdGraceMs);
+            PlayerPrefs.SetInt(CountInKey, countInEnabled ? 1 : 0);
             PlayerPrefs.Save();
         }
 
@@ -198,6 +216,54 @@ namespace RhythmPlayer.Play
             autoPlayEnabled = !autoPlayEnabled;
             if (playfield != null) playfield.SetAutoPlay(autoPlayEnabled);
             SaveSettings();
+        }
+
+        void AdjustJudgeOffset(int deltaMs)
+        {
+            judgeOffsetMs = Mathf.Clamp(judgeOffsetMs + deltaMs, -100, 100);
+            if (playfield != null) playfield.SetJudgeOffsetSeconds(judgeOffsetMs / 1000f);
+            SaveSettings();
+        }
+
+        void AdjustHoldGrace(int deltaMs)
+        {
+            holdGraceMs = Mathf.Clamp(holdGraceMs + deltaMs, 0, 200);
+            if (playfield != null) playfield.SetHoldReleaseGrace(holdGraceMs / 1000f);
+            SaveSettings();
+        }
+
+        void ToggleCountIn()
+        {
+            countInEnabled = !countInEnabled;
+            SaveSettings();
+        }
+
+        /// <summary>开始正式游玩：按设置排入开曲定位音（4 个整拍的打击音），随后音乐在 0 拍起播</summary>
+        void BeginPlayback(double songSeconds)
+        {
+            var leadIn = 0.0;
+            if (countInEnabled && clock != null) leadIn = 4.0 * clock.SecondsPerBeat;
+
+            clock.PlayFrom(songSeconds, leadIn);
+            if (leadIn > 0.0 && playfield != null)
+            {
+                playfield.ScheduleCountIn(4, clock.LastScheduledStartDsp, clock.SecondsPerBeat, 0.7f);
+            }
+            state = State.Playing;
+        }
+
+        /// <summary>缓存音频（最多保留 4 首，先进先出），避免重复解码</summary>
+        void CacheClip(string path, AudioClip clip)
+        {
+            if (clip == null) return;
+            clipCache[path] = clip;
+            clipCacheOrder.Enqueue(path);
+            while (clipCacheOrder.Count > 4)
+            {
+                var oldest = clipCacheOrder.Dequeue();
+                if (oldest == path) continue;
+                clipCache.Remove(oldest);
+            }
         }
 
         void AssignKey(int lane, KeyCode key)
@@ -307,6 +373,7 @@ namespace RhythmPlayer.Play
             if (index < 0 || index >= songs.Count) return;
 
             SongRepository.DeleteSong(songs[index]);
+            ChartCompiler.Clear();
             loadedIndex = -1;
             previewActive = false;
             if (clock != null) clock.Stop();
@@ -329,8 +396,7 @@ namespace RhythmPlayer.Play
             if (loadedIndex == selectedIndex && clock != null && clock.HasClip)
             {
                 previewActive = false;
-                clock.PlayFrom(0.0);
-                state = State.Playing;
+                BeginPlayback(0.0);
                 return;
             }
             StartCoroutine(LoadSongRoutine(Mathf.Clamp(selectedIndex, 0, songs.Count - 1), false));
@@ -352,8 +418,8 @@ namespace RhythmPlayer.Play
         void RestartSong()
         {
             maxDriftMs = 0f;
-            if (clock != null) clock.PlayFrom(0.0);
-            state = State.Playing;
+            if (clock != null) BeginPlayback(0.0);
+            else state = State.Playing;
         }
 
         void OnApplicationPause(bool pauseStatus)
@@ -453,41 +519,49 @@ namespace RhythmPlayer.Play
             if (clock != null) clock.Stop();
             if (playfield != null) playfield.ClearForSelect();
 
-            var url = "file:///" + song.AudioPath.Replace('\\', '/');
-            using (var request = UnityWebRequestMultimedia.GetAudioClip(url, GuessAudioType(song.AudioPath)))
+            AudioClip clip;
+            if (clipCache.TryGetValue(song.AudioPath, out var cached))
             {
-                yield return request.SendWebRequest();
-                if (request.result != UnityWebRequest.Result.Success)
+                clip = cached; // 音频缓存命中：不再重复解码
+            }
+            else
+            {
+                var url = "file:///" + song.AudioPath.Replace('\\', '/');
+                using (var request = UnityWebRequestMultimedia.GetAudioClip(url, GuessAudioType(song.AudioPath)))
                 {
-                    loadingText = "音频加载失败：" + request.error;
-                    Debug.LogError("[选曲] " + loadingText);
-                    loadedIndex = -1;
-                    state = State.SongSelect;
-                    yield break;
+                    yield return request.SendWebRequest();
+                    if (request.result != UnityWebRequest.Result.Success)
+                    {
+                        loadingText = "音频加载失败：" + request.error;
+                        Debug.LogError("[选曲] " + loadingText);
+                        loadedIndex = -1;
+                        state = State.SongSelect;
+                        yield break;
+                    }
+                    clip = DownloadHandlerAudioClip.GetContent(request);
+                    CacheClip(song.AudioPath, clip);
                 }
+            }
 
-                var clip = DownloadHandlerAudioClip.GetContent(request);
-                loadingText = "";
-                currentSong = song;
-                maxDriftMs = 0f;
-                loadedIndex = index;
-                clock.LoadClip(clip, song.Bpm, song.FirstTime);
-                playfield.LoadSong(song);
+            loadingText = "";
+            currentSong = song;
+            maxDriftMs = 0f;
+            loadedIndex = index;
+            clock.LoadClip(clip, song.Bpm, song.FirstTime);
+            playfield.LoadSong(song);
 
-                if (preview)
-                {
-                    playfield.SetAutoPlay(true);
-                    previewStartTime = Mathf.Clamp(previewStartSeconds, 0f, Mathf.Max(0f, clip.length - previewLengthSeconds - 1f));
-                    previewActive = true;
-                    clock.PlayFrom(previewStartTime);
-                    state = State.SongSelect;
-                }
-                else
-                {
-                    playfield.SetAutoPlay(autoPlayEnabled);
-                    clock.PlayFrom(0.0);
-                    state = State.Playing;
-                }
+            if (preview)
+            {
+                playfield.SetAutoPlay(true);
+                previewStartTime = Mathf.Clamp(previewStartSeconds, 0f, Mathf.Max(0f, clip.length - previewLengthSeconds - 1f));
+                previewActive = true;
+                clock.PlayFrom(previewStartTime);
+                state = State.SongSelect;
+            }
+            else
+            {
+                playfield.SetAutoPlay(autoPlayEnabled);
+                BeginPlayback(0.0);
             }
         }
 
@@ -801,69 +875,74 @@ namespace RhythmPlayer.Play
                 }
             }
 
-            var panelHeight = Mathf.Min(UiTheme.Height - 20f, 700f);
-            var panel = new Rect((UiTheme.Width - 760f) * 0.5f, (UiTheme.Height - panelHeight) * 0.5f, 760f, panelHeight);
+            var panelWidth = 1060f;
+            var panelHeight = Mathf.Min(UiTheme.Height - 20f, 640f);
+            var panel = new Rect((UiTheme.Width - panelWidth) * 0.5f, (UiTheme.Height - panelHeight) * 0.5f, panelWidth, panelHeight);
             GUI.Box(panel, GUIContent.none, resultPanelStyle);
-            GUI.Label(new Rect(panel.x, panel.y + 14f, panel.width, 44f), "设置", menuTitleStyle);
+            GUI.Label(new Rect(panel.x, panel.y + 12f, panel.width, 44f), "设置", menuTitleStyle);
 
-            var left = panel.x + 50f;
+            var leftX = panel.x + 44f;
+            var rightX = panel.x + 552f;
             var rowY = panel.y + 64f;
-            const float rowHeight = 54f;
 
-            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "音量", settingsLabelStyle);
-            if (GUI.Button(new Rect(left + 240f, rowY, 72f, 50f), "－", menuButtonStyle)) AdjustVolume(-0.05f);
-            GUI.Label(new Rect(left + 322f, rowY, 150f, rowHeight), $"{volume * 100f:0}%", settingsValueStyle);
-            if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustVolume(0.05f);
+            var r0 = DrawAdjustRow(leftX, rowY, "音量", $"{volume * 100f:0}%");
+            if (r0 != 0) AdjustVolume(0.05f * r0);
+            var r1 = DrawAdjustRow(leftX, rowY + 60f, "下落速度", $"{noteSpeed:0.0}×");
+            if (r1 != 0) AdjustSpeed(0.1f * r1);
+            var r2 = DrawAdjustRow(leftX, rowY + 120f, "最高帧率", $"{FpsPresets[fpsIndex]}");
+            if (r2 != 0) AdjustFps(r2);
+            GUI.Label(new Rect(leftX, rowY + 180f, 150f, 52f), "自动演示", settingsLabelStyle);
+            if (GUI.Button(new Rect(leftX + 152f, rowY + 180f, 238f, 46f), autoPlayEnabled ? "开（自动演奏）" : "关（手动游玩）", smallButtonStyle)) ToggleAutoPlay();
 
-            rowY += 60f;
-            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "下落速度", settingsLabelStyle);
-            if (GUI.Button(new Rect(left + 240f, rowY, 72f, 50f), "－", menuButtonStyle)) AdjustSpeed(-0.1f);
-            GUI.Label(new Rect(left + 322f, rowY, 150f, rowHeight), $"{noteSpeed:0.0}×", settingsValueStyle);
-            if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustSpeed(0.1f);
+            var r3 = DrawAdjustRow(rightX, rowY, "判定偏移", $"{judgeOffsetMs:+0;-0;0} ms");
+            if (r3 != 0) AdjustJudgeOffset(r3 * 5);
+            var r4 = DrawAdjustRow(rightX, rowY + 60f, "长条容差", $"{holdGraceMs} ms");
+            if (r4 != 0) AdjustHoldGrace(r4 * 10);
+            GUI.Label(new Rect(rightX, rowY + 120f, 150f, 52f), "开曲定位音", settingsLabelStyle);
+            if (GUI.Button(new Rect(rightX + 152f, rowY + 120f, 238f, 46f), countInEnabled ? "开（4 拍打击音）" : "关", smallButtonStyle)) ToggleCountIn();
 
-            rowY += 60f;
-            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "最高帧率", settingsLabelStyle);
-            if (GUI.Button(new Rect(left + 240f, rowY, 72f, 50f), "－", menuButtonStyle)) AdjustFps(-1);
-            GUI.Label(new Rect(left + 322f, rowY, 150f, rowHeight), $"{FpsPresets[fpsIndex]}", settingsValueStyle);
-            if (GUI.Button(new Rect(left + 482f, rowY, 72f, 50f), "＋", menuButtonStyle)) AdjustFps(1);
-
-            rowY += 60f;
-            GUI.Label(new Rect(left, rowY, 220f, rowHeight), "自动演示", settingsLabelStyle);
-            if (GUI.Button(new Rect(left + 240f, rowY, 314f, 50f), autoPlayEnabled ? "开（谱面自动演奏）" : "关（手动游玩）", menuButtonStyle)) ToggleAutoPlay();
-
-            rowY += 68f;
-            GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), "—— 按键映射（点后按新键，Esc 取消）——", hintStyle);
-
-            rowY += 30f;
-            const float cellWidth = 330f;
+            var mapY = panel.y + 316f;
+            GUI.Label(new Rect(panel.x, mapY, panel.width, 24f), "—— 按键映射（点后按新键，Esc 取消）——", hintStyle);
+            const float cellWidth = 480f;
             const float cellHeight = 48f;
             for (var row = 0; row < 3; row++)
             {
                 for (var column = 0; column < 2; column++)
                 {
                     var lane = row + column * 3;
-                    var rect = new Rect(left + column * (cellWidth + 10f), rowY + row * 54f, cellWidth, cellHeight);
+                    var rect = new Rect(leftX + column * (cellWidth + 16f), mapY + 30f + row * 54f, cellWidth, cellHeight);
                     var label = rebindLane == lane ? $"{lane + 1}：请按新键…" : $"{lane + 1}：{KeyDisplay(playfield != null ? playfield.GetJudgeKey(lane) : KeyCode.None)}";
                     if (GUI.Button(rect, label, smallButtonStyle)) rebindLane = lane;
                 }
             }
 
-            rowY += 3f * 54f + 14f;
             var songTime = clock != null ? clock.SongTime : 0.0;
-            var beat = clock != null ? clock.Beat : 0.0;
             var bpm = clock != null ? clock.Bpm : 0f;
-            GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), $"歌曲时间 {songTime:F3} s      拍数 {beat:F2}      BPM {bpm:F0}      时钟偏差 {maxDriftMs:F1} ms", hintStyle);
+            var fast = playfield != null ? playfield.FastCount : 0;
+            var slow = playfield != null ? playfield.SlowCount : 0;
+            GUI.Label(new Rect(panel.x, panel.y + 516f, panel.width, 24f),
+                $"歌曲时间 {songTime:F3} s      BPM {bpm:F0}      时钟偏差 {maxDriftMs:F1} ms      偏早 {fast} / 偏晚 {slow}（FAST / SLOW）", hintStyle);
 
-            rowY += 30f;
             var hintLine = IsTouchPlatform
-                ? "触摸六边形上的判定点即可打击；左上角按钮暂停"
-                : "空格 暂停/继续 · R 重开 · Esc 返回 · Tab 自动/手动";
-            GUI.Label(new Rect(panel.x, rowY, panel.width, 24f), hintLine, hintStyle);
+                ? "触摸判定点即可打击；总判晚(SLOW)就加大偏移，总判早(FAST)就减小"
+                : "空格 暂停/继续 · R 重开 · Esc 返回 · Tab 自动/手动 · 总判晚(SLOW)加大偏移，总判早(FAST)减小";
+            GUI.Label(new Rect(panel.x, panel.y + 544f, panel.width, 24f), hintLine, hintStyle);
 
-            if (GUI.Button(new Rect(panel.x + (panel.width - 240f) * 0.5f, panel.y + panelHeight - 66f, 240f, 52f), "返回", menuButtonStyle))
+            if (GUI.Button(new Rect(panel.x + (panel.width - 240f) * 0.5f, panel.y + panelHeight - 62f, 240f, 50f), "返回", menuButtonStyle))
             {
                 state = settingsReturn;
             }
+        }
+
+        /// <summary>设置行：标签 + 减 + 数值 + 加；返回 -1（减） / 0（没点） / 1（加）</summary>
+        int DrawAdjustRow(float x, float y, string label, string value)
+        {
+            GUI.Label(new Rect(x, y, 150f, 52f), label, settingsLabelStyle);
+            var result = 0;
+            if (GUI.Button(new Rect(x + 152f, y, 58f, 46f), "－", smallButtonStyle)) result = -1;
+            GUI.Label(new Rect(x + 214f, y, 110f, 52f), value, settingsValueStyle);
+            if (GUI.Button(new Rect(x + 328f, y, 58f, 46f), "＋", smallButtonStyle)) result = 1;
+            return result;
         }
 
         static string KeyDisplay(KeyCode key)

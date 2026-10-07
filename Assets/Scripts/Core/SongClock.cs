@@ -101,15 +101,19 @@ namespace RhythmPlayer.Core
             smoothingTime = 0.0;
         }
 
-        /// <summary>从指定歌曲时间开始播放（提前 0.1 秒预约给音频线程，保证起播干净）</summary>
-        public void PlayFrom(double songSeconds = 0.0)
+        /// <summary>上一次 PlayFrom 预约的起播 dspTime（用于对齐开曲定位音）</summary>
+        public double LastScheduledStartDsp { get; private set; }
+
+        /// <summary>从指定歌曲时间开始播放；leadInSeconds 为前置留白（开曲定位音用）</summary>
+        public void PlayFrom(double songSeconds = 0.0, double leadInSeconds = 0.0)
         {
             if (source == null || source.clip == null) return;
             var t = Mathf.Clamp((float)songSeconds, 0f, Mathf.Max(0f, source.clip.length - 0.01f));
             source.Stop();
             source.time = t;
-            var startDsp = AudioSettings.dspTime + 0.1;
+            var startDsp = AudioSettings.dspTime + 0.1 + leadInSeconds;
             source.PlayScheduled(startDsp);
+            LastScheduledStartDsp = startDsp;
             anchorDsp = startDsp - t;
             pauseTime = t;
             smoothingTime = AudioSettings.dspTime - anchorDsp;

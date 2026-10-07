@@ -92,10 +92,18 @@ namespace RhythmPlayer.Play
             public SpriteRenderer Body;
             public SpriteRenderer Tail;
             public SpriteRenderer BothLine;
-            public ChartNote Note;
+            public RuntimeNote Note;
             public bool Judged;
             public bool Vanish;
             public bool HoldActive;
+        }
+
+        /// <summary>FAST / SLOW 提示（在判定点内侧淡出）</summary>
+        sealed class TimingPopup
+        {
+            public Vector3 WorldPosition;
+            public bool IsFast;
+            public float Age;
         }
 
         sealed class Effect
@@ -118,15 +126,23 @@ namespace RhythmPlayer.Play
         readonly float[] padMissTimer = new float[6];
         readonly bool[] laneTouchHeld = new bool[6];
 
-        ChartData chart;
+        CompiledChart chart;
         int nextIndex;
-        double lastBeat;
+        double lastTime;
+        float secondsPerBeat = 0.3f;
+        float judgeOffsetSeconds;
+        float holdReleaseGrace = 0.12f;
+        int fastCount;
+        int slowCount;
         bool ready;
         SpriteRenderer backgroundRenderer;
         GameObject comboRoot;
         SpriteRenderer comboTag;
         AudioSource sfxSource;
         AudioSource missSource;
+        readonly AudioSource[] countInSources = new AudioSource[4];
+        readonly List<TimingPopup> timingPopups = new List<TimingPopup>();
+        GUIStyle fastSlowStyle;
         Camera mainCamera;
 
         string percentText = "0.00%";
@@ -179,13 +195,19 @@ namespace RhythmPlayer.Play
                 return;
             }
 
-            chart = ChartParser.LoadFile(song.ChartPath);
-            foreach (var error in chart.Errors) Debug.LogWarning("[谱面] " + error);
-            Debug.Log($"[谱面] {song.Name}：{chart.Notes.Count} 个音符，其中长条 {chart.HoldCount} 个");
+            secondsPerBeat = 60f / Mathf.Max(1f, song.Bpm);
+            chart = ChartCompiler.Get(song.ChartPath, song.FirstTime, secondsPerBeat); // 编译一次 + 缓存
+            if (chart == null || chart.TotalNotes == 0)
+            {
+                Debug.LogError("[谱面] 无法装载：" + song.ChartPath);
+                ready = false;
+                return;
+            }
+            Debug.Log($"[谱面] {song.Name}：{chart.TotalNotes} 个音符，其中长条 {chart.HoldCount} 个");
 
             nextIndex = 0;
-            lastBeat = 0.0;
-            ready = chart.Notes.Count > 0;
+            lastTime = 0.0;
+            ready = true;
             lastAccuracy = -1f;
             lastComboShown = -1;
 
@@ -202,6 +224,7 @@ namespace RhythmPlayer.Play
                 effectPool.Push(effects[i].Renderer);
             }
             effects.Clear();
+            timingPopups.Clear();
 
             chart = null;
             ready = false;
@@ -220,6 +243,8 @@ namespace RhythmPlayer.Play
             maxCombo = 0;
             comboPulse = 0f;
             comboBreakFlash = 0f;
+            fastCount = 0;
+            slowCount = 0;
         }
 
         public int BestCount => bestCount;
@@ -227,15 +252,17 @@ namespace RhythmPlayer.Play
         public int GoodCount => goodCount;
         public int MissCount => missCount;
         public int MaxCombo => maxCombo;
-        public int TotalNotes => chart != null ? chart.Notes.Count : 0;
+        public int TotalNotes => chart != null ? chart.TotalNotes : 0;
+        public int FastCount => fastCount;
+        public int SlowCount => slowCount;
 
         public float Accuracy
         {
             get
             {
-                if (chart == null || chart.Notes.Count == 0) return 0f;
+                if (chart == null || chart.TotalNotes == 0) return 0f;
                 var weight = bestCount + coolCount * 0.8f + goodCount * 0.6f;
-                return weight / chart.Notes.Count;
+                return weight / chart.TotalNotes;
             }
         }
 
@@ -246,6 +273,35 @@ namespace RhythmPlayer.Play
         public void SetNoteSpeed(float value) => unitsPerBeat = Mathf.Clamp(value, 0.6f, 6f);
 
         public void SetAutoPlay(bool value) => autoPlay = value;
+
+        /// <summary>设置判定偏移（秒，正值 = 判定整体延后，补偿习惯性打晚）</summary>
+        public void SetJudgeOffsetSeconds(float value) => judgeOffsetSeconds = value;
+
+        /// <summary>设置长条松手容差（秒，尾前该时间内松手不算断）</summary>
+        public void SetHoldReleaseGrace(float value) => holdReleaseGrace = Mathf.Clamp(value, 0f, 0.3f);
+
+        /// <summary>开曲定位音：在起播 dspTime 之前的若干个整拍上排入打击音（每拍一个独立音源，时序精确）</summary>
+        public void ScheduleCountIn(int ticks, double startDsp, float beatSeconds, float volume)
+        {
+            if (hitSound == null) return;
+            for (var i = 0; i < ticks && i < countInSources.Length; i++)
+            {
+                var time = startDsp - (ticks - i) * beatSeconds;
+                if (time < AudioSettings.dspTime) continue;
+
+                var source = countInSources[i];
+                if (source == null)
+                {
+                    source = gameObject.AddComponent<AudioSource>();
+                    source.playOnAwake = false;
+                    source.spatialBlend = 0f;
+                    source.clip = hitSound;
+                    countInSources[i] = source;
+                }
+                source.volume = volume;
+                source.PlayScheduled(time);
+            }
+        }
 
         public KeyCode GetJudgeKey(int lane)
         {
@@ -309,26 +365,26 @@ namespace RhythmPlayer.Play
         {
             if (comboPulse > 0f) comboPulse = Mathf.Max(0f, comboPulse - Time.deltaTime * 2.5f);
             if (comboBreakFlash > 0f) comboBreakFlash = Mathf.Max(0f, comboBreakFlash - Time.deltaTime * 1.8f);
+            UpdateTimingPopups();
             UpdateComboDisplay();
             HandleInput();
             UpdateEffects();
             if (!ready || clock == null) return;
 
-            var beat = clock.Beat;
-            if (System.Math.Abs(beat - lastBeat) > 1.0) ResetTo(beat);
-            lastBeat = beat;
+            var nowSeconds = clock.SongTime;
+            if (System.Math.Abs(nowSeconds - lastTime) > secondsPerBeat) ResetTo(nowSeconds);
+            lastTime = nowSeconds;
 
             var apothem = hexRadius * 0.866f;
             var flightStart = apothem - spawnRadius;
             var birthLength = birthBeats * unitsPerBeat;
+            var unitsPerSecond = unitsPerBeat / Mathf.Max(0.01f, secondsPerBeat);
 
-            while (nextIndex < chart.Notes.Count && (chart.Notes[nextIndex].StartBeat - beat) * unitsPerBeat <= flightStart + birthLength)
+            while (nextIndex < chart.TotalNotes && (chart.Notes[nextIndex].StartSeconds - nowSeconds) * unitsPerSecond <= flightStart + birthLength)
             {
                 Activate(nextIndex);
                 nextIndex++;
             }
-
-            var nowSeconds = clock.SongTime;
 
             for (var i = active.Count - 1; i >= 0; i--)
             {
@@ -343,9 +399,8 @@ namespace RhythmPlayer.Play
 
                 if (!view.Judged)
                 {
-                    var noteSeconds = clock.BeatToSeconds(note.StartBeat);
-                    if (nowSeconds >= noteSeconds + MissWindowSeconds) ApplyJudgment(view, GradeMiss);
-                    else if (autoPlay && nowSeconds >= noteSeconds) ApplyJudgment(view, GradeBest);
+                    if (nowSeconds - judgeOffsetSeconds >= note.StartSeconds + MissWindowSeconds) ApplyJudgment(view, GradeMiss);
+                    else if (autoPlay && nowSeconds >= note.StartSeconds) ApplyJudgment(view, GradeBest);
                 }
                 if (view.Vanish)
                 {
@@ -359,7 +414,7 @@ namespace RhythmPlayer.Play
                     var holdLane = Mathf.Clamp(note.Lane, 0, 5);
                     if (!IsLaneHeld(holdLane))
                     {
-                        if (nowSeconds < clock.BeatToSeconds(note.EndBeat) - 0.12f)
+                        if (nowSeconds - judgeOffsetSeconds < note.EndSeconds - holdReleaseGrace)
                         {
                             view.HoldActive = false;
                             RegisterMiss(holdLane);
@@ -379,8 +434,8 @@ namespace RhythmPlayer.Play
                 var radial = PadDirection(lane);
                 var rotation = Quaternion.Euler(0f, 0f, PadAngleDeg[lane]);
                 var noteWidth = 0.9f;
-                var ageHead = (float)(note.StartBeat - beat) * unitsPerBeat;
-                var ageTail = (float)(note.EndBeat - beat) * unitsPerBeat;
+                var ageHead = (float)(note.StartSeconds - nowSeconds) * unitsPerSecond;
+                var ageTail = (float)(note.EndSeconds - nowSeconds) * unitsPerSecond;
 
                 float headDist;
                 float headScale;
@@ -442,15 +497,15 @@ namespace RhythmPlayer.Play
             }
         }
 
-        void ResetTo(double beat)
+        void ResetTo(double nowSeconds)
         {
             for (var i = active.Count - 1; i >= 0; i--) Release(i);
 
             nextIndex = 0;
-            while (nextIndex < chart.Notes.Count && chart.Notes[nextIndex].StartBeat <= beat) nextIndex++;
+            while (nextIndex < chart.TotalNotes && chart.Notes[nextIndex].StartSeconds <= nowSeconds) nextIndex++;
             for (var i = 0; i < nextIndex; i++)
             {
-                if (chart.Notes[i].EndBeat > beat) Activate(i);
+                if (chart.Notes[i].EndSeconds > nowSeconds) Activate(i);
             }
 
             ResetCounters();
@@ -516,6 +571,7 @@ namespace RhythmPlayer.Play
             comboPulse = 1f;
             padFlashTimer[lane] = Mathf.Max(padFlashTimer[lane], 0.12f); // 命中即亮判定点
 
+            if (sfxSource != null) sfxSource.pitch = 1f + Mathf.Min(combo, 60) * 0.005f; // 连击越高音调越高
             PlayHitSound(hitSoundVolume);
             SpawnFx(radial * apothem);
             SpawnPopup(radial * (apothem - 0.75f), grade == GradeBest ? bestSprite : grade == GradeCool ? coolSprite : goodSprite);
@@ -536,7 +592,7 @@ namespace RhythmPlayer.Play
 
         void TryJudgeByInput(int lane)
         {
-            var now = clock.SongTime;
+            var now = clock.SongTime - judgeOffsetSeconds;
             var bestIndex = -1;
             var bestDelta = float.MaxValue;
 
@@ -545,9 +601,9 @@ namespace RhythmPlayer.Play
                 var view = active[i];
                 if (view.Judged || view.Note.Lane != lane) continue;
 
-                var delta = Mathf.Abs((float)(clock.BeatToSeconds(view.Note.StartBeat) - now));
-                if (delta > GoodWindowMs / 1000f) continue;
-                if (delta < bestDelta)
+                var delta = (float)(now - view.Note.StartSeconds);
+                if (Mathf.Abs(delta) > GoodWindowMs / 1000f) continue;
+                if (Mathf.Abs(delta) < Mathf.Abs(bestDelta))
                 {
                     bestDelta = delta;
                     bestIndex = i;
@@ -559,9 +615,34 @@ namespace RhythmPlayer.Play
                 return;
             }
 
-            var ms = bestDelta * 1000f;
+            var ms = Mathf.Abs(bestDelta) * 1000f;
             var grade = ms <= BestWindowMs ? GradeBest : ms <= CoolWindowMs ? GradeCool : GradeGood;
+
+            // FAST / SLOW 统计与提示（偏差超过 8ms 才提示）
+            if (bestDelta < -0.008f) fastCount++;
+            else if (bestDelta > 0.008f) slowCount++;
+            if (ms > 8f)
+            {
+                var laneIndex = Mathf.Clamp(active[bestIndex].Note.Lane, 0, 5);
+                timingPopups.Add(new TimingPopup
+                {
+                    WorldPosition = PadDirection(laneIndex) * (hexRadius * 0.866f - 1.15f),
+                    IsFast = bestDelta < 0f,
+                    Age = 0f,
+                });
+            }
+
             ApplyJudgment(active[bestIndex], grade);
+        }
+
+        /// <summary>推进 FAST / SLOW 提示的淡出</summary>
+        void UpdateTimingPopups()
+        {
+            for (var i = timingPopups.Count - 1; i >= 0; i--)
+            {
+                timingPopups[i].Age += Time.deltaTime;
+                if (timingPopups[i].Age >= 0.5f) timingPopups.RemoveAt(i);
+            }
         }
 
         void PlayHitSound(float volume)
@@ -999,6 +1080,35 @@ namespace RhythmPlayer.Play
                 percentText = (accuracy * 100f).ToString("0.00") + "%";
             }
             GUI.Label(new Rect(UiTheme.Width - 340f, 16f, 320f, 40f), percentText, percentStyle);
+
+            // FAST / SLOW 提示（世界坐标 → 设计空间坐标）
+            if (timingPopups.Count > 0)
+            {
+                var cam = MainCamera;
+                if (cam != null)
+                {
+                    fastSlowStyle ??= new GUIStyle(GUI.skin.label)
+                    {
+                        fontSize = 18,
+                        fontStyle = FontStyle.Bold,
+                        alignment = TextAnchor.MiddleCenter,
+                    };
+                    var scale = Mathf.Max(0.0001f, UiTheme.GuiScale);
+                    for (var i = 0; i < timingPopups.Count; i++)
+                    {
+                        var popup = timingPopups[i];
+                        var screenPos = cam.WorldToScreenPoint(popup.WorldPosition);
+                        if (screenPos.z <= 0f) continue;
+                        var alpha = Mathf.Clamp01(1f - popup.Age / 0.5f);
+                        fastSlowStyle.normal.textColor = popup.IsFast
+                            ? new Color(0.65f, 0.85f, 1f, alpha)
+                            : new Color(1f, 0.72f, 0.5f, alpha);
+                        var designX = screenPos.x / scale;
+                        var designY = UiTheme.Height - screenPos.y / scale;
+                        GUI.Label(new Rect(designX - 50f, designY - 10f, 100f, 20f), popup.IsFast ? "FAST" : "SLOW", fastSlowStyle);
+                    }
+                }
+            }
         }
     }
 }
