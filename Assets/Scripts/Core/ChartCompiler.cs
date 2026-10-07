@@ -13,10 +13,6 @@ namespace RhythmPlayer.Core
         public bool IsHold;
         public bool IsDouble;
         public sbyte PartnerLane;
-        public bool IsScroll;
-        public byte ScrollType;
-        public short ScrollAngle;
-        public bool ScrollRight;
     }
 
     /// <summary>编译后的谱面：按开始时间排序的运行时音符 + 统计</summary>
@@ -79,29 +75,21 @@ namespace RhythmPlayer.Core
 
         static CompiledChart Compile(ChartData data, float firstTimeOffset, float secondsPerBeat)
         {
-            var list = new List<RuntimeNote>(data.Notes.Count);
+            var notes = new List<RuntimeNote>(data.Notes.Count);
             var holdCount = 0;
             var scrollCount = 0;
-            var lastScroll = -1;
 
             for (var i = 0; i < data.Notes.Count; i++)
             {
                 var note = data.Notes[i];
-
-                // 滑条接续腿（类型 0 的行）：起点接上一腿终点，本行那个拍数是本腿终点。
-                // 并回上一条滑条：延长时长 + 沿区号绕圈走一步得到新的判定区，不新建音符。
-                if (note.IsScroll && note.Style == 0 && lastScroll >= 0)
+                if (note.IsScroll)
                 {
-                    var prev = list[lastScroll];
-                    prev.EndSeconds = firstTimeOffset + (float)note.StartBeat * secondsPerBeat;
-                    prev.Lane = (byte)Mathf.Clamp(ChartParser.WalkZone(prev.Lane, note.Side, note.AngleDeg), 0, 5);
-                    list[lastScroll] = prev;
+                    // 滑条暂不参与游玩：只统计，不生成可玩音符
+                    scrollCount++;
                     continue;
                 }
-
                 if (note.IsHold) holdCount++;
-                if (note.IsScroll) scrollCount++;
-                list.Add(new RuntimeNote
+                notes.Add(new RuntimeNote
                 {
                     StartSeconds = firstTimeOffset + (float)note.StartBeat * secondsPerBeat,
                     EndSeconds = firstTimeOffset + (float)note.EndBeat * secondsPerBeat,
@@ -109,16 +97,10 @@ namespace RhythmPlayer.Core
                     IsHold = note.IsHold,
                     IsDouble = note.IsDouble,
                     PartnerLane = (sbyte)Mathf.Clamp(note.PartnerLane, -1, 5),
-                    IsScroll = note.IsScroll,
-                    ScrollType = (byte)Mathf.Clamp(note.Style, 0, 6),
-                    ScrollAngle = (short)note.AngleDeg,
-                    ScrollRight = note.Side == 'R',
                 });
-                lastScroll = note.IsScroll ? list.Count - 1 : -1;
             }
 
-            var notes = list.ToArray();
-            return new CompiledChart { Notes = notes, HoldCount = holdCount, ScrollCount = scrollCount };
+            return new CompiledChart { Notes = notes.ToArray(), HoldCount = holdCount, ScrollCount = scrollCount };
         }
     }
 }
