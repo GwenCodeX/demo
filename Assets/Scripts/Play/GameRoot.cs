@@ -64,7 +64,7 @@ namespace RhythmPlayer.Play
         float volume = 1f;
         float noteSpeed = 2.4f;
         int fpsIndex = FpsPresets.Length - 1;
-        bool autoPlayEnabled = true;
+        bool autoPlayEnabled = false;
         int rebindLane = -1;
         int pendingDelete = -1;
         int judgeOffsetMs;
@@ -117,7 +117,7 @@ namespace RhythmPlayer.Play
             volume = PlayerPrefs.GetFloat(VolumeKey, 1f);
             noteSpeed = PlayerPrefs.GetFloat(SpeedKey, playfield != null ? playfield.NoteSpeed : 2.4f);
             fpsIndex = Mathf.Clamp(PlayerPrefs.GetInt(FpsKey, FpsPresets.Length - 1), 0, FpsPresets.Length - 1);
-            autoPlayEnabled = PlayerPrefs.GetInt(AutoPlayKey, 1) != 0;
+            autoPlayEnabled = PlayerPrefs.GetInt(AutoPlayKey, 0) != 0;
             judgeOffsetMs = Mathf.Clamp(PlayerPrefs.GetInt(JudgeOffsetKey, 0), -100, 100);
             holdGraceMs = Mathf.Clamp(PlayerPrefs.GetInt(HoldGraceKey, 120), 0, 200);
             countInEnabled = PlayerPrefs.GetInt(CountInKey, 1) != 0;

@@ -459,7 +459,20 @@ namespace RhythmPlayer.Play
                     headDist = Mathf.Min(headDist, apothem);
 
                     var tailRaw = apothem - ageTail;
-                    var tailEmerged = tailRaw > spawnRadius;
+                    float tailScale;
+                    float tailAlpha;
+                    if (ageTail > flightStart)
+                    {
+                        var tailBirth = Mathf.Clamp01((flightStart + birthLength - ageTail) / birthLength);
+                        tailScale = Mathf.Lerp(BirthScaleFrom, 1f, tailBirth * tailBirth * (3f - 2f * tailBirth));
+                        tailAlpha = tailBirth;
+                    }
+                    else
+                    {
+                        tailScale = 1f;
+                        tailAlpha = 1f;
+                    }
+                    var tailEmerged = ageTail <= flightStart + birthLength;
                     var tailDist = Mathf.Min(headDist, Mathf.Max(tailRaw, spawnRadius));
 
                     PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
@@ -478,7 +491,7 @@ namespace RhythmPlayer.Play
                     if (tailEmerged)
                     {
                         view.Tail.gameObject.SetActive(true);
-                        PlaceNote(view.Tail, radial * tailDist, rotation, noteWidth, 0.3f, 1f, 1f);
+                        PlaceNote(view.Tail, radial * tailDist, rotation, noteWidth, 0.3f, tailScale, tailAlpha);
                     }
                     else if (view.Tail.gameObject.activeSelf)
                     {
