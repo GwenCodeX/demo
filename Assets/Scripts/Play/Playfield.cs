@@ -512,9 +512,9 @@ namespace RhythmPlayer.Play
                 }
                 else
                 {
-                    PlaceNote(view.Head, radial * headDist, rotation, noteWidth, 0.3f, headScale, headAlpha);
-                    UpdateBothLine(view, apothem, headDist);
-                    if (headDist > apothem + Overshoot) Release(i);
+                    var clamped = Mathf.Min(headDist, apothem + Overshoot);
+                    PlaceNote(view.Head, radial * clamped, rotation, noteWidth, 0.3f, headScale, headAlpha);
+                    UpdateBothLine(view, apothem, clamped);
                 }
             }
         }
@@ -582,6 +582,7 @@ namespace RhythmPlayer.Play
             {
                 RegisterMiss(lane);
                 SpawnPopup(radial * (apothem - 0.75f), missSprite);
+                view.Vanish = true;
                 return;
             }
 
