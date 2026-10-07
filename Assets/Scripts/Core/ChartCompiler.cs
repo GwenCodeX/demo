@@ -79,16 +79,29 @@ namespace RhythmPlayer.Core
 
         static CompiledChart Compile(ChartData data, float firstTimeOffset, float secondsPerBeat)
         {
-            var notes = new RuntimeNote[data.Notes.Count];
+            var list = new List<RuntimeNote>(data.Notes.Count);
             var holdCount = 0;
             var scrollCount = 0;
+            var lastScroll = -1;
 
             for (var i = 0; i < data.Notes.Count; i++)
             {
                 var note = data.Notes[i];
+
+                // 滑条接续腿（类型 0 的行）：起点接上一腿终点，本行那个拍数是本腿终点。
+                // 并回上一条滑条：延长时长 + 沿区号绕圈走一步得到新的判定区，不新建音符。
+                if (note.IsScroll && note.Style == 0 && lastScroll >= 0)
+                {
+                    var prev = list[lastScroll];
+                    prev.EndSeconds = firstTimeOffset + (float)note.StartBeat * secondsPerBeat;
+                    prev.Lane = (byte)Mathf.Clamp(ChartParser.WalkZone(prev.Lane, note.Side, note.AngleDeg), 0, 5);
+                    list[lastScroll] = prev;
+                    continue;
+                }
+
                 if (note.IsHold) holdCount++;
                 if (note.IsScroll) scrollCount++;
-                notes[i] = new RuntimeNote
+                list.Add(new RuntimeNote
                 {
                     StartSeconds = firstTimeOffset + (float)note.StartBeat * secondsPerBeat,
                     EndSeconds = firstTimeOffset + (float)note.EndBeat * secondsPerBeat,
@@ -100,9 +113,11 @@ namespace RhythmPlayer.Core
                     ScrollType = (byte)Mathf.Clamp(note.Style, 0, 6),
                     ScrollAngle = (short)note.AngleDeg,
                     ScrollRight = note.Side == 'R',
-                };
+                });
+                lastScroll = note.IsScroll ? list.Count - 1 : -1;
             }
 
+            var notes = list.ToArray();
             return new CompiledChart { Notes = notes, HoldCount = holdCount, ScrollCount = scrollCount };
         }
     }
